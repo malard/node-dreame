@@ -160,13 +160,83 @@ export async function setProperties(
   return extractResultArray(res);
 }
 
-/** Invoke a single MIoT action on a device. */
+/**
+ * Invoke a single MIoT action on a device.
+ *
+ * Note: unlike `set_properties`/`get_properties`, the action call's `params`
+ * is a single object, NOT an array. Passing an array here would surface as
+ * a misleading "device offline" timeout (code 80001) from the Dreame cloud.
+ */
 export async function callAction(base: CommonInput, action: MiotAction): Promise<unknown> {
-  const params = [
-    { did: base.did, siid: action.siid, aiid: action.aiid, in: action.in ?? [] },
-  ];
-  const res = await sendCommand({ ...base, method: "action", params });
-  return res.data?.result ?? res.result ?? res;
+  // Bypass sendCommand's array-shaped helper since action params is an object.
+  return sendActionCommand({ ...base, action });
+}
+
+async function sendActionCommand(input: CommonInput & { action: MiotAction }): Promise<unknown> {
+  const country = input.country ?? REGION_DEFAULT_COUNTRY[input.region];
+  const lang = input.lang ?? REGION_DEFAULT_LANG[input.region];
+  const host = input.apiHost ?? REGION_HOSTS[input.region];
+  const id = randomRequestId();
+  const url = `https://${host}/dreame-iot-com-10000/device/sendCommand`;
+  const headers = buildHeaders({
+    region: input.region,
+    country,
+    lang,
+    accessToken: input.session.accessToken,
+    contentType: "application/json",
+  });
+  const body = JSON.stringify({
+    did: input.did,
+    id,
+    data: {
+      did: input.did,
+      id,
+      method: "action",
+      params: {
+        did: input.did,
+        siid: input.action.siid,
+        aiid: input.action.aiid,
+        in: input.action.in ?? [],
+      },
+      from: "XXXXXX",
+    },
+  });
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "POST", headers, body });
+  } catch (err) {
+    throw new DreameTransportError(`network error contacting ${url}`, err);
+  }
+
+  const text = await res.text();
+  let parsed: SendCommandResponse | null = null;
+  try {
+    parsed = text ? (JSON.parse(text) as SendCommandResponse) : null;
+  } catch {
+    // fallthrough
+  }
+  if (!res.ok) {
+    throw new DreameApiError(
+      `action failed: ${res.status} ${text.slice(0, 200)}`,
+      res.status,
+      parsed,
+    );
+  }
+  if (!parsed) {
+    throw new DreameApiError(
+      `action response was not JSON (status ${res.status})`,
+      res.status,
+    );
+  }
+  if (parsed.code !== undefined && parsed.code !== 0) {
+    throw new DreameApiError(
+      `action rejected: code=${parsed.code} msg=${parsed.msg ?? "?"}`,
+      res.status,
+      parsed,
+    );
+  }
+  return parsed.data?.result ?? parsed.result ?? parsed;
 }
 
 function extractResultArray(res: SendCommandResponse): PropertyResult[] {

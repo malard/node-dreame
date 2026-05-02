@@ -8,6 +8,7 @@ import { DreameAuthError } from "./errors.js";
 import { login, refresh } from "./auth.js";
 import { listDevices } from "./devices.js";
 import { DreameSubscription } from "./mqtt.js";
+import { Vacuum } from "./vacuum.js";
 import {
   callAction,
   getProperties,
@@ -154,6 +155,11 @@ export class DreameClient {
     const sub = new DreameSubscription({ device, session, region: this.#region });
     await sub.open();
     return sub;
+  }
+
+  /** High-level wrapper around a vacuum device. */
+  getVacuum(device: DreameDevice): Vacuum {
+    return new Vacuum(this, device);
   }
 
   /** Discard the current session. */

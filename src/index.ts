@@ -14,3 +14,17 @@ export type {
 } from "./commands.js";
 export { DreameSubscription } from "./mqtt.js";
 export type { PropertyChange, RawMqttEvent } from "./mqtt.js";
+export { Vacuum } from "./vacuum.js";
+export type { VacuumState } from "./vacuum.js";
+export {
+  VacuumStatus,
+  ChargingStatus,
+  SuctionLevel,
+  WaterVolume,
+  CleaningMode,
+  VACUUM_PROP,
+  VACUUM_ACTION,
+  BATTERY_PROP,
+  SETTINGS_PROP,
+  CONSUMABLE_PROP,
+} from "./miot-spec.js";
