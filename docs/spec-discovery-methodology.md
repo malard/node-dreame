@@ -52,7 +52,7 @@ multiple toggles to disambiguate by elimination.
 | siid:piid | Constant | Type | Notes |
 |---|---|---|---|
 | 27.6  | `MAST_RAISED` | bool | The X50's elevating LiDAR mast. |
-| 27.15 | `HEATER_ENABLED` | bool | Derived flag — tracks `MOP_WASH_TEMP > 0`. |
+| 27.15 | `HOT_WATER_STATUS` | bool | Hot-water status read (Tasshack label). On r2532a tracks `MOP_WASH_TEMP > 0` so reads as a derived "heater on" flag. |
 | 28.4  | `MOTION_FLAG` | bool | 1 while undocked / in motion. |
 | 28.8  | `MOP_WASH_TEMP` | enum 0/1/2/3 | Normal/Mild/Warm/High. Heater follows. |
 | 28.22 | `SMART_MOP_WASH` | bool | Master toggle that overrides manual settings. |
@@ -136,7 +136,11 @@ The cleaning schedule format is a single dash-delimited string with a
 *bimodal* config encoding depending on whether the schedule is using a
 CleanGenius preset or a Custom config.
 
-### String format (9 fields)
+### String format (per slot, 9 fields)
+
+When multiple schedule slots are configured the slots are joined with `;` and
+each slot follows the format below (the `;` separator is confirmed by
+Tasshack/dreame-vacuum's parser; node-dreame only ever observed a single slot).
 
 ```
 <id>-<enabled>-<HH:MM>-<weekdays>-<recurring>-<roomScope>-<wetness>-<config>-<rooms>
@@ -145,11 +149,11 @@ CleanGenius preset or a Custom config.
 | Field | Meaning |
 |---|---|
 | 1 | schedule slot id |
-| 2 | 0 = paused, 1 = active |
+| 2 | 0 = paused, 1 = active. Tasshack also treats 2 = active and 3 = invalid (both unobserved here). |
 | 3 | trigger time `HH:MM` |
 | 4 | 7-char Mon-Sun bitmap (`1111111` = daily) |
 | 5 | 0 = one-shot, 1 = recurring |
-| 6 | 0 = whole map, 1 = specific rooms |
+| 6 | 0 = whole map, 1 = specific rooms (Tasshack labels this field `map_id` — likely older-firmware semantics) |
 | 7 | mop wetness (0 in non-Mop modes; 1-32 slider, 16 = Standard) |
 | 8 | mode-dependent — see below |
 | 9 | mode-dependent — see below |
