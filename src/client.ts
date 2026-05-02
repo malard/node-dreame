@@ -18,7 +18,7 @@ import {
   type PropertyResult,
   type PropertyWrite,
 } from "./commands.js";
-import { REGION_DEFAULT_COUNTRY, REGION_DEFAULT_LANG, REGION_HOSTS } from "./config.js";
+import { RequestContext } from "./http.js";
 
 const DEFAULT_REGION: DreameRegion = "eu";
 /** Refresh the access token this many seconds before it expires. */
@@ -35,10 +35,7 @@ const REFRESH_LEEWAY_SECS = 100;
  */
 export class DreameClient {
   readonly #opts: DreameClientOptions;
-  readonly #region: DreameRegion;
-  readonly #country: string;
-  readonly #lang: string;
-  readonly #authHost: string;
+  readonly #ctx: RequestContext;
   #session: DreameSession | null = null;
 
   constructor(opts: DreameClientOptions) {
@@ -46,14 +43,14 @@ export class DreameClient {
       throw new DreameAuthError("email and password are required");
     }
     this.#opts = opts;
-    this.#region = opts.region ?? DEFAULT_REGION;
-    this.#country = REGION_DEFAULT_COUNTRY[this.#region];
-    this.#lang = REGION_DEFAULT_LANG[this.#region];
-    this.#authHost = opts.authHost ?? REGION_HOSTS[this.#region];
+    this.#ctx = new RequestContext({
+      region: opts.region ?? DEFAULT_REGION,
+      ...(opts.authHost !== undefined ? { host: opts.authHost } : {}),
+    });
   }
 
   get region(): DreameRegion {
-    return this.#region;
+    return this.#ctx.region;
   }
 
   get session(): DreameSession | null {
@@ -70,10 +67,10 @@ export class DreameClient {
     this.#session = await login({
       email: this.#opts.email,
       password: this.#opts.password,
-      region: this.#region,
-      country: this.#country,
-      lang: this.#lang,
-      authHost: this.#authHost,
+      region: this.#ctx.region,
+      country: this.#ctx.country,
+      lang: this.#ctx.lang,
+      authHost: this.#ctx.host,
     });
     this.#log("login: got session", {
       uid: this.#session.uid,
@@ -96,10 +93,10 @@ export class DreameClient {
         try {
           this.#session = await refresh({
             refreshToken: this.#session.refreshToken,
-            region: this.#region,
-            country: this.#country,
-            lang: this.#lang,
-            authHost: this.#authHost,
+            region: this.#ctx.region,
+            country: this.#ctx.country,
+            lang: this.#ctx.lang,
+            authHost: this.#ctx.host,
           });
           return this.#session;
         } catch (err) {
@@ -119,10 +116,10 @@ export class DreameClient {
     this.#log("getDevices: requesting list");
     const devices = await listDevices({
       session,
-      region: this.#region,
-      country: this.#country,
-      lang: this.#lang,
-      apiHost: this.#authHost,
+      region: this.#ctx.region,
+      country: this.#ctx.country,
+      lang: this.#ctx.lang,
+      apiHost: this.#ctx.host,
     });
     this.#log("getDevices: got list", { count: devices.length });
     return devices;
@@ -152,7 +149,7 @@ export class DreameClient {
    */
   async subscribe(device: DreameDevice): Promise<DreameSubscription> {
     const session = await this.ensureSession();
-    const sub = new DreameSubscription({ device, session, region: this.#region });
+    const sub = new DreameSubscription({ device, session, region: this.#ctx.region });
     await sub.open();
     return sub;
   }
@@ -167,31 +164,18 @@ export class DreameClient {
     this.#session = null;
   }
 
-  #commonInput(did: string, session: DreameSession): {
-    session: DreameSession;
-    region: DreameRegion;
-    did: string;
-    country: string;
-    lang: string;
-    apiHost: string;
-  } {
+  #commonInput(did: string, session: DreameSession) {
     return {
       session,
-      region: this.#region,
+      region: this.#ctx.region,
       did,
-      country: this.#country,
-      lang: this.#lang,
-      apiHost: this.#authHost,
+      country: this.#ctx.country,
+      lang: this.#ctx.lang,
+      apiHost: this.#ctx.host,
     };
   }
 
   #log(msg: string, meta?: Record<string, unknown>): void {
-    if (this.#opts.logger) {
-      if (meta !== undefined) {
-        this.#opts.logger(msg, meta);
-      } else {
-        this.#opts.logger(msg);
-      }
-    }
+    this.#opts.logger?.(msg, meta);
   }
 }

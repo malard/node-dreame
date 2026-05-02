@@ -1,11 +1,7 @@
 import type { DreameRegion, DreameSession } from "./types.js";
-import { DreameApiError, DreameDeviceOfflineError, DreameTransportError } from "./errors.js";
-
-/** Cloud response code that means "device didn't ACK; may be offline". */
-const CODE_DEVICE_OFFLINE = 80001;
-import { buildHeaders } from "./auth.js";
-import { REGION_DEFAULT_COUNTRY, REGION_DEFAULT_LANG, REGION_HOSTS } from "./config.js";
+import { COMMAND_FROM_FIELD, IOT_COM_PREFIX_DREAME } from "./config.js";
 import { randomRequestId } from "./crypto.js";
+import { httpPostJsonBody, RequestContext, type BaseResponse } from "./http.js";
 
 /** A single MIoT property reference (service + property id). */
 export interface MiotProp {
@@ -35,104 +31,72 @@ export interface PropertyResult {
   [key: string]: unknown;
 }
 
+/** Top-level shape of a `/device/sendCommand` response. */
+interface SendCommandResponse extends BaseResponse {
+  data?: {
+    /** Property reads/writes return their per-property results here as an array. */
+    result?: PropertyResult[] | unknown;
+    [key: string]: unknown;
+  };
+  /** Some firmware variants return `result` at the top level instead of inside `data`. */
+  result?: PropertyResult[] | unknown;
+}
+
 interface SendCommandInput {
   session: DreameSession;
   region: DreameRegion;
   did: string;
+  /** MIoT method: `get_properties`, `set_properties`, `action`. */
   method: string;
-  params: unknown[];
+  /**
+   * For `get_properties` / `set_properties`: an array of property descriptors.
+   * For `action`: a single object descriptor (NOT wrapped in an array — Dreame
+   * surfaces the wrong shape as a misleading code 80001 "device offline" error).
+   */
+  params: unknown;
   country?: string;
   lang?: string;
   apiHost?: string;
-  /** Brand prefix in the URL: 10000 = Dreame, 20000 = Mova. */
+  /** Brand prefix in the URL (default 10000 = Dreame, 20000 = Mova). */
   iotComPrefix?: number;
-}
-
-interface SendCommandResponse {
-  code?: number;
-  msg?: string;
-  data?: {
-    result?: unknown;
-    [key: string]: unknown;
-  };
-  result?: unknown;
-  [key: string]: unknown;
+  fetchImpl?: typeof fetch;
 }
 
 /**
- * Low-level dispatch to /device/sendCommand.
- * Most callers should use `getProperties`, `setProperties`, or `callAction` instead.
+ * Low-level dispatch to `/device/sendCommand`. Most callers should use
+ * `getProperties`, `setProperties`, or `callAction` instead.
+ *
+ * Caller is responsible for `params` shape (array for property calls, object
+ * for action calls) — see `SendCommandInput.params`.
  */
 export async function sendCommand(input: SendCommandInput): Promise<SendCommandResponse> {
-  const country = input.country ?? REGION_DEFAULT_COUNTRY[input.region];
-  const lang = input.lang ?? REGION_DEFAULT_LANG[input.region];
-  const host = input.apiHost ?? REGION_HOSTS[input.region];
-  const prefix = input.iotComPrefix ?? 10000;
+  const ctx = new RequestContext({
+    region: input.region,
+    ...(input.country !== undefined ? { country: input.country } : {}),
+    ...(input.lang !== undefined ? { lang: input.lang } : {}),
+    ...(input.apiHost !== undefined ? { host: input.apiHost } : {}),
+    ...(input.fetchImpl !== undefined ? { fetchImpl: input.fetchImpl } : {}),
+  });
+  const prefix = input.iotComPrefix ?? IOT_COM_PREFIX_DREAME;
   const id = randomRequestId();
 
-  const url = `https://${host}/dreame-iot-com-${prefix}/device/sendCommand`;
-  const headers = buildHeaders({
-    region: input.region,
-    country,
-    lang,
+  return httpPostJsonBody<SendCommandResponse>({
+    ctx,
+    path: `/dreame-iot-com-${prefix}/device/sendCommand`,
     accessToken: input.session.accessToken,
-    contentType: "application/json",
-  });
-  const body = JSON.stringify({
-    did: input.did,
-    id,
-    data: {
+    body: {
       did: input.did,
       id,
-      method: input.method,
-      params: input.params,
-      from: "XXXXXX",
+      data: {
+        did: input.did,
+        id,
+        method: input.method,
+        params: input.params,
+        from: COMMAND_FROM_FIELD,
+      },
     },
+    context: input.method,
   });
-
-  let res: Response;
-  try {
-    res = await fetch(url, { method: "POST", headers, body });
-  } catch (err) {
-    throw new DreameTransportError(`network error contacting ${url}`, err);
-  }
-
-  const text = await res.text();
-  let parsed: SendCommandResponse | null = null;
-  try {
-    parsed = text ? (JSON.parse(text) as SendCommandResponse) : null;
-  } catch {
-    // fallthrough
-  }
-
-  if (!res.ok) {
-    throw new DreameApiError(
-      `sendCommand failed: ${res.status} ${text.slice(0, 200)}`,
-      res.status,
-      parsed,
-    );
-  }
-  if (!parsed) {
-    throw new DreameApiError(
-      `sendCommand response was not JSON (status ${res.status})`,
-      res.status,
-    );
-  }
-  if (parsed.code !== undefined && parsed.code !== 0) {
-    if (parsed.code === CODE_DEVICE_OFFLINE) {
-      throw new DreameDeviceOfflineError(
-        `device offline: ${parsed.msg ?? "timeout"}`,
-        res.status,
-        parsed,
-      );
-    }
-    throw new DreameApiError(
-      `sendCommand rejected: code=${parsed.code} msg=${parsed.msg ?? "?"}`,
-      res.status,
-      parsed,
-    );
-  }
-  return parsed;
 }
 
 interface CommonInput {
@@ -142,6 +106,7 @@ interface CommonInput {
   country?: string;
   lang?: string;
   apiHost?: string;
+  fetchImpl?: typeof fetch;
 }
 
 /** Read one or more MIoT properties from a device. */
@@ -177,91 +142,27 @@ export async function setProperties(
  * a misleading "device offline" timeout (code 80001) from the Dreame cloud.
  */
 export async function callAction(base: CommonInput, action: MiotAction): Promise<unknown> {
-  // Bypass sendCommand's array-shaped helper since action params is an object.
-  return sendActionCommand({ ...base, action });
+  const params = {
+    did: base.did,
+    siid: action.siid,
+    aiid: action.aiid,
+    in: action.in ?? [],
+  };
+  const res = await sendCommand({ ...base, method: "action", params });
+  return res.data?.result ?? res.result ?? res;
 }
 
-async function sendActionCommand(input: CommonInput & { action: MiotAction }): Promise<unknown> {
-  const country = input.country ?? REGION_DEFAULT_COUNTRY[input.region];
-  const lang = input.lang ?? REGION_DEFAULT_LANG[input.region];
-  const host = input.apiHost ?? REGION_HOSTS[input.region];
-  const id = randomRequestId();
-  const url = `https://${host}/dreame-iot-com-10000/device/sendCommand`;
-  const headers = buildHeaders({
-    region: input.region,
-    country,
-    lang,
-    accessToken: input.session.accessToken,
-    contentType: "application/json",
-  });
-  const body = JSON.stringify({
-    did: input.did,
-    id,
-    data: {
-      did: input.did,
-      id,
-      method: "action",
-      params: {
-        did: input.did,
-        siid: input.action.siid,
-        aiid: input.action.aiid,
-        in: input.action.in ?? [],
-      },
-      from: "XXXXXX",
-    },
-  });
-
-  let res: Response;
-  try {
-    res = await fetch(url, { method: "POST", headers, body });
-  } catch (err) {
-    throw new DreameTransportError(`network error contacting ${url}`, err);
-  }
-
-  const text = await res.text();
-  let parsed: SendCommandResponse | null = null;
-  try {
-    parsed = text ? (JSON.parse(text) as SendCommandResponse) : null;
-  } catch {
-    // fallthrough
-  }
-  if (!res.ok) {
-    throw new DreameApiError(
-      `action failed: ${res.status} ${text.slice(0, 200)}`,
-      res.status,
-      parsed,
-    );
-  }
-  if (!parsed) {
-    throw new DreameApiError(
-      `action response was not JSON (status ${res.status})`,
-      res.status,
-    );
-  }
-  if (parsed.code !== undefined && parsed.code !== 0) {
-    if (parsed.code === CODE_DEVICE_OFFLINE) {
-      throw new DreameDeviceOfflineError(
-        `device offline: ${parsed.msg ?? "timeout"}`,
-        res.status,
-        parsed,
-      );
-    }
-    throw new DreameApiError(
-      `action rejected: code=${parsed.code} msg=${parsed.msg ?? "?"}`,
-      res.status,
-      parsed,
-    );
-  }
-  return parsed.data?.result ?? parsed.result ?? parsed;
-}
-
+/**
+ * Pull the per-property result array out of a sendCommand response.
+ * Dreame's response shape is consistent enough to type, but we still tolerate
+ * the data being one nesting level shallower (some firmware variants).
+ */
 function extractResultArray(res: SendCommandResponse): PropertyResult[] {
-  const candidate =
-    (res.data?.result as unknown) ??
-    (res.result as unknown) ??
-    (res.data as unknown);
-  if (Array.isArray(candidate)) {
-    return candidate as PropertyResult[];
+  if (Array.isArray(res.data?.result)) {
+    return res.data.result as PropertyResult[];
+  }
+  if (Array.isArray(res.result)) {
+    return res.result as PropertyResult[];
   }
   return [];
 }

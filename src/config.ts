@@ -47,3 +47,20 @@ export const APP_USER_AGENT = "Dart/3.2 (dart:io)";
 
 /** Tenant id — `000000` for Dreame, `000002` for Mova. */
 export const TENANT_DREAME = "000000";
+
+/**
+ * Literal value placed in the `from` field of every command envelope. Dreame's
+ * cloud appears to ignore it — the original Flutter app sends "XXXXXX" verbatim
+ * and we mirror that for parity. Keeping it as a constant so the magic string
+ * lives in exactly one place.
+ */
+export const COMMAND_FROM_FIELD = "XXXXXX";
+
+/** `iotComPrefix` for Dreame brand requests (path component in /dreame-iot-com-<n>/). */
+export const IOT_COM_PREFIX_DREAME = 10000;
+/** `iotComPrefix` for Mova brand requests (untested). */
+export const IOT_COM_PREFIX_MOVA = 20000;
+
+/** Standard HTTP content types used by the Dreame backend. */
+export const CONTENT_TYPE_JSON = "application/json";
+export const CONTENT_TYPE_FORM = "application/x-www-form-urlencoded";

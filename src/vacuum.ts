@@ -314,6 +314,44 @@ export class Vacuum extends EventEmitter {
     ]);
   }
 
+  /**
+   * Apply multiple settings in a single MQTT round-trip.
+   * Each provided field becomes one entry in the `set_properties` array.
+   *
+   * Pass only the fields you want to change. `volume` is range-checked (0-100).
+   *
+   * ```ts
+   * await vacuum.setSettings({ suction: SuctionLevel.Quiet, waterVolume: WaterVolume.Low });
+   * ```
+   */
+  setSettings(opts: {
+    suction?: SuctionLevel;
+    waterVolume?: WaterVolume;
+    cleaningMode?: CleaningMode | number;
+    volume?: number;
+  }): Promise<unknown> {
+    const writes: Array<{ siid: number; piid: number; value: unknown }> = [];
+    if (opts.suction !== undefined) {
+      writes.push({ ...VACUUM_PROP.SUCTION_LEVEL, value: opts.suction });
+    }
+    if (opts.waterVolume !== undefined) {
+      writes.push({ ...VACUUM_PROP.WATER_VOLUME, value: opts.waterVolume });
+    }
+    if (opts.cleaningMode !== undefined) {
+      writes.push({ ...VACUUM_PROP.CLEANING_MODE, value: opts.cleaningMode });
+    }
+    if (opts.volume !== undefined) {
+      if (opts.volume < 0 || opts.volume > 100) {
+        throw new RangeError("volume must be 0-100");
+      }
+      writes.push({ ...SETTINGS_PROP.VOLUME, value: opts.volume });
+    }
+    if (writes.length === 0) {
+      return Promise.resolve([]);
+    }
+    return this.#client.setProperties(this.device.did, writes);
+  }
+
   // ─── internals ─────────────────────────────────────────────────────
 
   #setOnline(online: boolean): void {
@@ -326,62 +364,76 @@ export class Vacuum extends EventEmitter {
 
   /** Returns true if the value actually changed. */
   #applyChange(siid: number, piid: number, value: unknown): boolean {
-    const next = { ...this.#state };
-    const num = typeof value === "number" ? value : null;
-
-    switch (`${siid}.${piid}`) {
-      case `${VACUUM_PROP.STATE.siid}.${VACUUM_PROP.STATE.piid}`:
-        next.miotStateRaw = num;
-        next.miotState = num !== null && (num in MiotState) ? (num as MiotState) : null;
-        break;
-      case `${VACUUM_PROP.ERROR.siid}.${VACUUM_PROP.ERROR.piid}`:
-        next.errorCode = num;
-        break;
-      case `${VACUUM_PROP.TASK_STATUS.siid}.${VACUUM_PROP.TASK_STATUS.piid}`:
-        next.taskStatusRaw = num;
-        break;
-      case `${BATTERY_PROP.LEVEL.siid}.${BATTERY_PROP.LEVEL.piid}`:
-        next.battery = num;
-        break;
-      case `${BATTERY_PROP.CHARGING_STATUS.siid}.${BATTERY_PROP.CHARGING_STATUS.piid}`:
-        next.chargingRaw = num;
-        next.charging = num !== null && (num in ChargingStatus) ? (num as ChargingStatus) : null;
-        break;
-      case `${VACUUM_PROP.SUCTION_LEVEL.siid}.${VACUUM_PROP.SUCTION_LEVEL.piid}`:
-        next.suctionRaw = num;
-        next.suction = num !== null && (num in SuctionLevel) ? (num as SuctionLevel) : null;
-        break;
-      case `${VACUUM_PROP.WATER_VOLUME.siid}.${VACUUM_PROP.WATER_VOLUME.piid}`:
-        next.waterVolumeRaw = num;
-        next.waterVolume = num !== null && (num in WaterVolume) ? (num as WaterVolume) : null;
-        break;
-      case `${VACUUM_PROP.CLEANING_MODE.siid}.${VACUUM_PROP.CLEANING_MODE.piid}`:
-        next.cleaningModeRaw = num;
-        next.cleaningMode = num !== null && num >= 0 && num <= 3 ? (num as CleaningMode) : null;
-        break;
-      case `${VACUUM_PROP.CLEANING_TIME.siid}.${VACUUM_PROP.CLEANING_TIME.piid}`:
-        next.cleaningTimeMin = num;
-        break;
-      case `${VACUUM_PROP.CLEANED_AREA.siid}.${VACUUM_PROP.CLEANED_AREA.piid}`:
-        next.cleanedAreaSqm = num;
-        break;
-      case `${SETTINGS_PROP.VOLUME.siid}.${SETTINGS_PROP.VOLUME.piid}`:
-        next.volume = num;
-        break;
-      case `${CONSUMABLE_PROP.MAIN_BRUSH_LEFT.siid}.${CONSUMABLE_PROP.MAIN_BRUSH_LEFT.piid}`:
-        next.mainBrushLeftPct = num;
-        break;
-      case `${CONSUMABLE_PROP.SIDE_BRUSH_LEFT.siid}.${CONSUMABLE_PROP.SIDE_BRUSH_LEFT.piid}`:
-        next.sideBrushLeftPct = num;
-        break;
-      case `${CONSUMABLE_PROP.FILTER_LEFT.siid}.${CONSUMABLE_PROP.FILTER_LEFT.piid}`:
-        next.filterLeftPct = num;
-        break;
-      default:
-        return false;
+    const handler = APPLIERS[propKey({ siid, piid })];
+    if (!handler) {
+      return false;
     }
-    const changed = JSON.stringify(this.#state) !== JSON.stringify(next);
-    this.#state = next;
+    const num = typeof value === "number" ? value : null;
+    const patch = handler(num);
+    let changed = false;
+    for (const k of Object.keys(patch) as Array<keyof VacuumState>) {
+      if (this.#state[k] !== patch[k]) {
+        changed = true;
+        break;
+      }
+    }
+    if (changed) {
+      this.#state = { ...this.#state, ...patch };
+    }
     return changed;
   }
 }
+
+// ─── property-applier table ──────────────────────────────────────────
+//
+// Each handler maps a single MIoT property push (numeric value, possibly
+// null if the device sent a non-number) to a partial state patch. The
+// `#applyChange` method looks up the right handler by `siid.piid`,
+// computes the patch, and merges it into state.
+//
+// Adding a new tracked property: add one entry here. No need to touch
+// `#applyChange`.
+
+type Patch = Partial<VacuumState>;
+type Applier = (num: number | null) => Patch;
+
+function propKey(p: { siid: number; piid: number }): string {
+  return `${p.siid}.${p.piid}`;
+}
+
+/** Narrow a raw int to an enum member, or null if it's not a known value. */
+function asEnum<T extends number>(num: number | null, enumObj: object): T | null {
+  return num !== null && num in enumObj ? (num as T) : null;
+}
+
+const APPLIERS: Record<string, Applier> = {
+  [propKey(VACUUM_PROP.STATE)]: (num) => ({
+    miotStateRaw: num,
+    miotState: asEnum<MiotState>(num, MiotState),
+  }),
+  [propKey(VACUUM_PROP.ERROR)]: (num) => ({ errorCode: num }),
+  [propKey(VACUUM_PROP.TASK_STATUS)]: (num) => ({ taskStatusRaw: num }),
+  [propKey(BATTERY_PROP.LEVEL)]: (num) => ({ battery: num }),
+  [propKey(BATTERY_PROP.CHARGING_STATUS)]: (num) => ({
+    chargingRaw: num,
+    charging: asEnum<ChargingStatus>(num, ChargingStatus),
+  }),
+  [propKey(VACUUM_PROP.SUCTION_LEVEL)]: (num) => ({
+    suctionRaw: num,
+    suction: asEnum<SuctionLevel>(num, SuctionLevel),
+  }),
+  [propKey(VACUUM_PROP.WATER_VOLUME)]: (num) => ({
+    waterVolumeRaw: num,
+    waterVolume: asEnum<WaterVolume>(num, WaterVolume),
+  }),
+  [propKey(VACUUM_PROP.CLEANING_MODE)]: (num) => ({
+    cleaningModeRaw: num,
+    cleaningMode: num !== null && num >= 0 && num <= 3 ? (num as CleaningMode) : null,
+  }),
+  [propKey(VACUUM_PROP.CLEANING_TIME)]: (num) => ({ cleaningTimeMin: num }),
+  [propKey(VACUUM_PROP.CLEANED_AREA)]: (num) => ({ cleanedAreaSqm: num }),
+  [propKey(SETTINGS_PROP.VOLUME)]: (num) => ({ volume: num }),
+  [propKey(CONSUMABLE_PROP.MAIN_BRUSH_LEFT)]: (num) => ({ mainBrushLeftPct: num }),
+  [propKey(CONSUMABLE_PROP.SIDE_BRUSH_LEFT)]: (num) => ({ sideBrushLeftPct: num }),
+  [propKey(CONSUMABLE_PROP.FILTER_LEFT)]: (num) => ({ filterLeftPct: num }),
+};

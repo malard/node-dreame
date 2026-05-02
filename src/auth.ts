@@ -1,15 +1,14 @@
 import type { DreameRegion, DreameSession } from "./types.js";
-import { DreameAuthError, DreameTransportError } from "./errors.js";
+import { DreameAuthError } from "./errors.js";
 import {
   APP_META,
   APP_USER_AGENT,
+  CONTENT_TYPE_FORM,
   OAUTH_BASIC_AUTH,
-  REGION_DEFAULT_COUNTRY,
-  REGION_DEFAULT_LANG,
-  REGION_HOSTS,
   TENANT_DREAME,
 } from "./config.js";
 import { buildRlcHeader, hashPassword } from "./crypto.js";
+import { httpPostJson, RequestContext, type BaseResponse } from "./http.js";
 
 export interface LoginInput {
   email: string;
@@ -21,6 +20,8 @@ export interface LoginInput {
   lang?: string;
   /** Override host (advanced — for testing). */
   authHost?: string;
+  /** Inject a fetch impl for testing. */
+  fetchImpl?: typeof fetch;
 }
 
 export interface RefreshInput {
@@ -29,10 +30,11 @@ export interface RefreshInput {
   country?: string;
   lang?: string;
   authHost?: string;
+  fetchImpl?: typeof fetch;
 }
 
-interface OAuthTokenResponse {
-  access_token: string;
+interface OAuthTokenResponse extends BaseResponse {
+  access_token?: string;
   refresh_token?: string;
   expires_in?: number;
   token_type?: string;
@@ -41,6 +43,9 @@ interface OAuthTokenResponse {
   country?: string;
   lang?: string;
   tenant_id?: string;
+  // OAuth-style errors are at top level rather than the API's `code`/`msg`.
+  error?: string;
+  error_description?: string;
   // Loose — Dreame can add fields without breaking us.
   [key: string]: unknown;
 }
@@ -61,7 +66,7 @@ export function buildHeaders(opts: {
   return {
     "user-agent": APP_USER_AGENT,
     authorization: OAUTH_BASIC_AUTH,
-    "content-type": opts.contentType ?? "application/x-www-form-urlencoded",
+    "content-type": opts.contentType ?? CONTENT_TYPE_FORM,
     "dreame-auth": auth,
     "dreame-meta": APP_META,
     "dreame-rlc": buildRlcHeader(opts.region, opts.lang, opts.country),
@@ -69,15 +74,22 @@ export function buildHeaders(opts: {
   };
 }
 
+function ctxFromInput(input: { region: DreameRegion; country?: string; lang?: string; authHost?: string; fetchImpl?: typeof fetch }): RequestContext {
+  return new RequestContext({
+    region: input.region,
+    ...(input.country !== undefined ? { country: input.country } : {}),
+    ...(input.lang !== undefined ? { lang: input.lang } : {}),
+    ...(input.authHost !== undefined ? { host: input.authHost } : {}),
+    ...(input.fetchImpl !== undefined ? { fetchImpl: input.fetchImpl } : {}),
+  });
+}
+
 /**
  * Authenticate against the Dreame native cloud and return a session.
  * Uses OAuth2 password grant with the app's static client credentials.
  */
 export async function login(input: LoginInput): Promise<DreameSession> {
-  const country = input.country ?? REGION_DEFAULT_COUNTRY[input.region];
-  const lang = input.lang ?? REGION_DEFAULT_LANG[input.region];
-  const host = input.authHost ?? REGION_HOSTS[input.region];
-
+  const ctx = ctxFromInput(input);
   const body = new URLSearchParams({
     grant_type: "password",
     scope: "all",
@@ -85,15 +97,10 @@ export async function login(input: LoginInput): Promise<DreameSession> {
     type: "account",
     username: input.email,
     password: hashPassword(input.password),
-    country,
-    lang,
+    country: ctx.country,
+    lang: ctx.lang,
   });
-
-  const url = `https://${host}/dreame-auth/oauth/token`;
-  const headers = buildHeaders({ region: input.region, country, lang });
-
-  const data = await postForToken(url, headers, body);
-  return toSession(data, input.region);
+  return postForToken(ctx, body);
 }
 
 /**
@@ -102,76 +109,38 @@ export async function login(input: LoginInput): Promise<DreameSession> {
  * (typically 7200). Refresh ~100s before expiry to be safe.
  */
 export async function refresh(input: RefreshInput): Promise<DreameSession> {
-  const country = input.country ?? REGION_DEFAULT_COUNTRY[input.region];
-  const lang = input.lang ?? REGION_DEFAULT_LANG[input.region];
-  const host = input.authHost ?? REGION_HOSTS[input.region];
-
+  const ctx = ctxFromInput(input);
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: input.refreshToken,
   });
-
-  const url = `https://${host}/dreame-auth/oauth/token`;
-  const headers = buildHeaders({ region: input.region, country, lang });
-
-  const data = await postForToken(url, headers, body);
-  return toSession(data, input.region);
+  return postForToken(ctx, body);
 }
 
-async function postForToken(
-  url: string,
-  headers: Record<string, string>,
-  body: URLSearchParams,
-): Promise<OAuthTokenResponse> {
-  let res: Response;
-  try {
-    res = await fetch(url, { method: "POST", headers, body });
-  } catch (err) {
-    throw new DreameTransportError(`network error contacting ${url}`, err);
+async function postForToken(ctx: RequestContext, body: URLSearchParams): Promise<DreameSession> {
+  const data = await httpPostJson<OAuthTokenResponse>({
+    ctx,
+    url: ctx.url("/dreame-auth/oauth/token"),
+    headers: ctx.headers(),
+    body,
+    context: "auth",
+    errorClass: DreameAuthError,
+    skipCodeCheck: true, // OAuth uses HTTP status + top-level error fields, not parsed.code
+  });
+
+  // Surface OAuth-style top-level error responses if HTTP was 200 but body says otherwise.
+  if (data.error || data.error_description) {
+    throw new DreameAuthError(
+      `auth failed: ${data.error ?? "?"} — ${data.error_description ?? "no description"}`,
+    );
   }
 
-  let parsed: unknown = null;
-  const text = await res.text();
-  if (text) {
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      // leave as text
-    }
-  }
-
-  if (!res.ok) {
-    const msg = describeAuthError(parsed, text, res.status);
-    throw new DreameAuthError(msg, res.status);
-  }
-
-  if (!parsed || typeof parsed !== "object") {
-    throw new DreameAuthError(`auth response was not JSON (status ${res.status})`);
-  }
-
-  const data = parsed as OAuthTokenResponse;
   if (!data.access_token || typeof data.access_token !== "string") {
     throw new DreameAuthError(
       `auth response missing access_token: ${JSON.stringify(data).slice(0, 200)}`,
     );
   }
 
-  return data;
-}
-
-function describeAuthError(parsed: unknown, raw: string, status: number): string {
-  if (parsed && typeof parsed === "object") {
-    const obj = parsed as Record<string, unknown>;
-    const code = obj["error"] ?? obj["code"];
-    const desc = obj["error_description"] ?? obj["msg"] ?? obj["message"];
-    if (code || desc) {
-      return `auth failed (${status}): ${code ?? "?"} — ${desc ?? "no description"}`;
-    }
-  }
-  return `auth failed (${status}): ${raw.slice(0, 200)}`;
-}
-
-function toSession(data: OAuthTokenResponse, region: DreameRegion): DreameSession {
   const expiresIn = typeof data.expires_in === "number" ? data.expires_in : 7200;
   const uid = data.uid !== undefined ? String(data.uid) : "";
   if (!uid) {
@@ -181,7 +150,7 @@ function toSession(data: OAuthTokenResponse, region: DreameRegion): DreameSessio
     accessToken: data.access_token,
     uid,
     expiresAt: Date.now() + expiresIn * 1000,
-    region,
+    region: ctx.region,
   };
   if (typeof data.refresh_token === "string") {
     session.refreshToken = data.refresh_token;

@@ -1,7 +1,5 @@
 import type { DreameDevice, DreameRegion, DreameSession } from "./types.js";
-import { DreameApiError, DreameTransportError } from "./errors.js";
-import { buildHeaders } from "./auth.js";
-import { REGION_DEFAULT_COUNTRY, REGION_DEFAULT_LANG, REGION_HOSTS } from "./config.js";
+import { httpPostJsonBody, RequestContext, type BaseResponse } from "./http.js";
 
 export interface ListDevicesInput {
   session: DreameSession;
@@ -9,20 +7,16 @@ export interface ListDevicesInput {
   country?: string;
   lang?: string;
   apiHost?: string;
+  fetchImpl?: typeof fetch;
 }
 
-interface DeviceListResponse {
-  code?: number;
-  msg?: string;
+interface DeviceListResponse extends BaseResponse {
   data?: {
-    page?: {
-      records?: RawDevice[];
-    };
+    page?: { records?: RawDevice[] };
     records?: RawDevice[];
   };
   // Tolerate older response shapes that returned records at the top level.
   records?: RawDevice[];
-  [key: string]: unknown;
 }
 
 interface RawDevice {
@@ -43,63 +37,30 @@ interface RawDevice {
  * Returns one entry per bound device, including shared (non-master) devices.
  */
 export async function listDevices(input: ListDevicesInput): Promise<DreameDevice[]> {
-  const country = input.country ?? REGION_DEFAULT_COUNTRY[input.region];
-  const lang = input.lang ?? REGION_DEFAULT_LANG[input.region];
-  const host = input.apiHost ?? REGION_HOSTS[input.region];
-
-  const url = `https://${host}/dreame-user-iot/iotuserbind/device/listV2`;
-  const headers = buildHeaders({
+  const ctx = new RequestContext({
     region: input.region,
-    country,
-    lang,
+    ...(input.country !== undefined ? { country: input.country } : {}),
+    ...(input.lang !== undefined ? { lang: input.lang } : {}),
+    ...(input.apiHost !== undefined ? { host: input.apiHost } : {}),
+    ...(input.fetchImpl !== undefined ? { fetchImpl: input.fetchImpl } : {}),
+  });
+
+  const parsed = await httpPostJsonBody<DeviceListResponse>({
+    ctx,
+    path: "/dreame-user-iot/iotuserbind/device/listV2",
     accessToken: input.session.accessToken,
-    contentType: "application/json",
+    body: {
+      sharedStatus: 1,
+      current: 1,
+      size: 100,
+      lang: ctx.lang,
+      timestamp: Date.now(),
+    },
+    context: "device list",
   });
-  const body = JSON.stringify({
-    sharedStatus: 1,
-    current: 1,
-    size: 100,
-    lang,
-    timestamp: Date.now(),
-  });
 
-  let res: Response;
-  try {
-    res = await fetch(url, { method: "POST", headers, body });
-  } catch (err) {
-    throw new DreameTransportError(`network error contacting ${url}`, err);
-  }
-
-  const text = await res.text();
-  let parsed: DeviceListResponse | null = null;
-  try {
-    parsed = text ? (JSON.parse(text) as DeviceListResponse) : null;
-  } catch {
-    // fallthrough — handled below
-  }
-
-  if (!res.ok) {
-    throw new DreameApiError(
-      `device list failed: ${res.status} ${text.slice(0, 200)}`,
-      res.status,
-      parsed,
-    );
-  }
-  if (!parsed) {
-    throw new DreameApiError(
-      `device list response was not JSON (status ${res.status})`,
-      res.status,
-    );
-  }
-  if (parsed.code !== undefined && parsed.code !== 0) {
-    throw new DreameApiError(
-      `device list rejected: code=${parsed.code} msg=${parsed.msg ?? "?"}`,
-      res.status,
-      parsed,
-    );
-  }
-
-  const records = parsed.data?.page?.records ?? parsed.data?.records ?? parsed.records ?? [];
+  const records =
+    parsed.data?.page?.records ?? parsed.data?.records ?? parsed.records ?? [];
   return records.map(toDevice);
 }
 
