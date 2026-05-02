@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
 import type { DreameClient } from "./client.js";
 import type { DreameDevice } from "./types.js";
-import type { DreameSubscription, PropertyChange } from "./mqtt.js";
+import type { DreameSubscription, OtaEvent, PropertyChange } from "./mqtt.js";
+import { DreameDeviceOfflineError } from "./errors.js";
 import {
   BATTERY_PROP,
   CONSUMABLE_PROP,
@@ -75,6 +76,18 @@ export interface VacuumState {
   mainBrushLeftPct: number | null;
   sideBrushLeftPct: number | null;
   filterLeftPct: number | null;
+
+  /**
+   * Whether the device is currently reachable via the cloud. Updated by
+   * MQTT connect/close events and by refresh() outcomes. `null` means
+   * unknown (haven't connected/refreshed yet).
+   */
+  online: boolean | null;
+  /**
+   * Latest OTA event seen (state + progress). `null` once the OTA settles
+   * back to `state: "idle"` or `state: "installed"`. Useful for UI progress bars.
+   */
+  ota: OtaEvent | null;
 }
 
 const EMPTY_STATE: VacuumState = {
@@ -97,6 +110,8 @@ const EMPTY_STATE: VacuumState = {
   mainBrushLeftPct: null,
   sideBrushLeftPct: null,
   filterLeftPct: null,
+  online: null,
+  ota: null,
 };
 
 /**
@@ -134,7 +149,13 @@ export class Vacuum extends EventEmitter {
     return { ...this.#state };
   }
 
-  /** Pull all known properties once and update the cached state. */
+  /**
+   * Pull all known properties once and update the cached state.
+   *
+   * If the device is offline (cloud returns 80001), this does NOT throw —
+   * it sets `state.online = false` and returns the (likely stale) snapshot.
+   * Any other error bubbles up.
+   */
   async refresh(): Promise<VacuumState> {
     const props = [
       VACUUM_PROP.STATE,
@@ -152,22 +173,37 @@ export class Vacuum extends EventEmitter {
       CONSUMABLE_PROP.SIDE_BRUSH_LEFT,
       CONSUMABLE_PROP.FILTER_LEFT,
     ];
-    const results = await this.#client.getProperties(this.device.did, props);
-    for (const r of results) {
-      if (r.code === 0 && r.value !== undefined) {
-        this.#applyChange(r.siid, r.piid, r.value);
+    try {
+      const results = await this.#client.getProperties(this.device.did, props);
+      for (const r of results) {
+        if (r.code === 0 && r.value !== undefined) {
+          this.#applyChange(r.siid, r.piid, r.value);
+        }
+      }
+      this.#setOnline(true);
+    } catch (err) {
+      if (err instanceof DreameDeviceOfflineError) {
+        this.#setOnline(false);
+      } else {
+        throw err;
       }
     }
     this.emit("change", this.state);
     return this.state;
   }
 
-  /** Subscribe to MQTT pushes and apply them to the local state. */
+  /**
+   * Subscribe to MQTT pushes and apply them to the local state.
+   * Also updates `state.online` from MQTT connect/close events and
+   * `state.ota` from `props` pushes that carry `ota_state`/`ota_progress`.
+   */
   async watch(): Promise<void> {
     if (this.#subscription) {
       return;
     }
     this.#subscription = await this.#client.subscribe(this.device);
+    this.#setOnline(true);
+
     this.#subscription.on("properties", (changes: PropertyChange[]) => {
       let dirty = false;
       for (const c of changes) {
@@ -179,6 +215,22 @@ export class Vacuum extends EventEmitter {
         this.emit("change", this.state);
       }
     });
+    this.#subscription.on("ota", (event: OtaEvent) => {
+      // Merge into the cached OTA snapshot — state and progress can arrive separately.
+      const cur = this.#state.ota ?? { did: this.device.did, state: null, progress: null };
+      const merged: OtaEvent = {
+        did: event.did,
+        state: event.state ?? cur.state,
+        progress: event.progress ?? cur.progress,
+      };
+      // Once the device reports idle/installed, clear the snapshot — OTA done.
+      const settled = merged.state === "idle" || merged.state === "installed";
+      this.#state = { ...this.#state, ota: settled ? null : merged };
+      this.emit("change", this.state);
+      this.emit("ota", merged);
+    });
+    this.#subscription.on("connect", () => this.#setOnline(true));
+    this.#subscription.on("close", () => this.#setOnline(false));
     this.#subscription.on("error", (err) => this.emit("error", err));
   }
 
@@ -263,6 +315,14 @@ export class Vacuum extends EventEmitter {
   }
 
   // ─── internals ─────────────────────────────────────────────────────
+
+  #setOnline(online: boolean): void {
+    if (this.#state.online === online) {
+      return;
+    }
+    this.#state = { ...this.#state, online };
+    this.emit("change", this.state);
+  }
 
   /** Returns true if the value actually changed. */
   #applyChange(siid: number, piid: number, value: unknown): boolean {

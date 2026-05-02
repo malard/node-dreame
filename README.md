@@ -63,19 +63,29 @@ Each entry in `src/miot-spec.ts` is annotated:
 
 Confirmed VERIFIED on r2532a:
 
-- Auth + device discovery + MQTT subscription
-- Property reads: state, error, battery, charging, suction, water, cleaning_mode (raw), task_status (raw), volume, consumables
+- Auth + device discovery
+- MQTT subscription incl. typed `properties_changed`, `props`, `_otc.info`, OTA progress channel
+- Property reads: state, error, battery, charging, suction, water, cleaning_mode (raw), task_status (raw), volume, consumables, firmware build, serial, timezone, DND config JSON, feature toggles JSON, version metadata
 - Property writes: round-trip no-op write
 - Actions: `LOCATE`, `TEST_SOUND`, `CLEAR_WARNING`
-- The `MiotState` enum (siid 2 piid 1) — values come from the device's own translated keyDefine
+- The `MiotState` enum (siid 2 piid 1) — values 13, 14, 2, 6 transitions confirmed live during an OTA cycle
+- OTA observation end-to-end (download → install → reboot → re-online → version flip from `4.3.9_2033` → `4.3.9_2199`) via the `props` channel
+- `DreameDeviceOfflineError` (cloud code 80001) distinguished from other API errors
 
 ASSUMED (works on older Dreames, untested on r2532a):
 
 - Actions: `START`, `PAUSE`, `STOP`, `CHARGE`/dock, `START_AUTO_EMPTY`, all reset actions
-- Enums: `SuctionLevel`, `WaterVolume`, `ChargingStatus`, `CleaningMode`
+- Enums: `SuctionLevel`, `WaterVolume`, `ChargingStatus`, `CleaningMode` (the last is known to be a packed bitfield on r2532a — raw int returned 5120; the simple 0–3 enum doesn't apply)
 - The `TASK_STATUS` field at siid 4 piid 1 — we read it as a raw int but have no enum mapping for r2532a (Tasshack's older-model values do not match observation)
 
 If you adopt this for another model, please contribute back what you verify.
+
+## Reverse-engineering notes
+
+The `notes/` directory in the [research scratchpad](https://github.com/Malard/node-dreame-research) (separate, not public) contains:
+- `auth-flow.md` — endpoint URLs, headers, request/response shapes for auth + device list
+- `ota-flow.md` — observed timeline + envelope shapes from a real firmware update
+- Keyfile dumps + raw event captures used to derive the spec
 
 ## License
 

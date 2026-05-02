@@ -1,5 +1,8 @@
 import type { DreameRegion, DreameSession } from "./types.js";
-import { DreameApiError, DreameTransportError } from "./errors.js";
+import { DreameApiError, DreameDeviceOfflineError, DreameTransportError } from "./errors.js";
+
+/** Cloud response code that means "device didn't ACK; may be offline". */
+const CODE_DEVICE_OFFLINE = 80001;
 import { buildHeaders } from "./auth.js";
 import { REGION_DEFAULT_COUNTRY, REGION_DEFAULT_LANG, REGION_HOSTS } from "./config.js";
 import { randomRequestId } from "./crypto.js";
@@ -116,7 +119,13 @@ export async function sendCommand(input: SendCommandInput): Promise<SendCommandR
     );
   }
   if (parsed.code !== undefined && parsed.code !== 0) {
-    // 80001 is the documented timeout code; surface it but as a typed error.
+    if (parsed.code === CODE_DEVICE_OFFLINE) {
+      throw new DreameDeviceOfflineError(
+        `device offline: ${parsed.msg ?? "timeout"}`,
+        res.status,
+        parsed,
+      );
+    }
     throw new DreameApiError(
       `sendCommand rejected: code=${parsed.code} msg=${parsed.msg ?? "?"}`,
       res.status,
@@ -230,6 +239,13 @@ async function sendActionCommand(input: CommonInput & { action: MiotAction }): P
     );
   }
   if (parsed.code !== undefined && parsed.code !== 0) {
+    if (parsed.code === CODE_DEVICE_OFFLINE) {
+      throw new DreameDeviceOfflineError(
+        `device offline: ${parsed.msg ?? "timeout"}`,
+        res.status,
+        parsed,
+      );
+    }
     throw new DreameApiError(
       `action rejected: code=${parsed.code} msg=${parsed.msg ?? "?"}`,
       res.status,

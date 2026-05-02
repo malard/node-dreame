@@ -12,14 +12,57 @@ export interface PropertyChange {
   value: unknown;
 }
 
+/**
+ * Untyped key/value push from the device on method `"props"` (note: distinct
+ * from `properties_changed`). Used by Dreame for non-MIoT signals — most
+ * notably OTA progress (`{"ota_progress": 0..100}`) and OTA state
+ * (`{"ota_state": "downloading"|"dowloaded"|"installing"|"installed"|"idle"}`).
+ *
+ * Yes, "dowloaded" is the literal string the device sends — Dreame's typo.
+ */
+export interface PropsPush {
+  did: string;
+  params: Record<string, unknown>;
+}
+
+/**
+ * Periodic device self-info push on method `"_otc.info"`. Confirmed fields:
+ *   hw_ver, fw_ver, model
+ *   ap.siid (SSID — yes named `siid`), ap.bssid, ap.rssi
+ *   netif.localIp, netif.mask, netif.gw
+ */
+export interface InfoPush {
+  did: string;
+  hwVer: string | null;
+  fwVer: string | null;
+  model: string | null;
+  ap: { ssid: string | null; bssid: string | null; rssi: number | null };
+  netif: { localIp: string | null; mask: string | null; gw: string | null };
+  /** Original `params` block, in case more fields appear. */
+  raw: Record<string, unknown>;
+}
+
+/**
+ * Convenience event combining `ota_state` and `ota_progress` from the
+ * `props` channel. Either field may be null on any single event — the
+ * device emits state and progress as separate pushes.
+ */
+export interface OtaEvent {
+  did: string;
+  state: string | null;
+  /** 0–100 integer when present. */
+  progress: number | null;
+}
+
 /** Raw MQTT envelope as received from the broker, before flattening. */
 export interface RawMqttEvent {
   id?: number;
-  did?: string;
+  did?: string | number;
   data?: {
     id?: number;
     method?: string;
-    params?: Array<{ did?: string; siid?: number; piid?: number; value?: unknown }>;
+    /** Array shape for properties_changed; object shape for props/_otc.info. */
+    params?: unknown;
   };
   [key: string]: unknown;
 }
@@ -33,6 +76,10 @@ interface SubscriptionInput {
 /**
  * Live MQTT subscription to a single device. Emits:
  *   `properties` (PropertyChange[]) — one event per `properties_changed` push
+ *   `props`      (PropsPush)         — one event per `props` push (k/v map)
+ *   `info`       (InfoPush)          — one event per `_otc.info` push (typed)
+ *   `ota`        (OtaEvent)          — convenience: extracted from `props` when
+ *                                       params contains ota_state or ota_progress
  *   `message`    (RawMqttEvent)     — the raw envelope, for low-level inspection
  *   `connect`    ()                  — when the underlying broker connects
  *   `close`      ()                  — when the connection drops
@@ -138,12 +185,22 @@ export class DreameSubscription extends EventEmitter {
       return;
     }
     this.emit("message", parsed);
-    if (parsed.data?.method === "properties_changed" && Array.isArray(parsed.data.params)) {
+
+    const did = String(parsed.did ?? this.#device.did);
+    const method = parsed.data?.method;
+    const params = parsed.data?.params;
+
+    if (method === "properties_changed" && Array.isArray(params)) {
       const changes: PropertyChange[] = [];
-      for (const p of parsed.data.params) {
+      for (const p of params as Array<{
+        did?: string | number;
+        siid?: number;
+        piid?: number;
+        value?: unknown;
+      }>) {
         if (typeof p.siid === "number" && typeof p.piid === "number") {
           changes.push({
-            did: String(p.did ?? parsed.did ?? this.#device.did),
+            did: String(p.did ?? did),
             siid: p.siid,
             piid: p.piid,
             value: p.value,
@@ -153,6 +210,29 @@ export class DreameSubscription extends EventEmitter {
       if (changes.length > 0) {
         this.emit("properties", changes);
       }
+      return;
+    }
+
+    if (method === "props" && params && typeof params === "object" && !Array.isArray(params)) {
+      const kv = params as Record<string, unknown>;
+      this.emit("props", { did, params: kv } satisfies PropsPush);
+      const hasOta = "ota_state" in kv || "ota_progress" in kv;
+      if (hasOta) {
+        const stateValue = kv["ota_state"];
+        const progressValue = kv["ota_progress"];
+        const event: OtaEvent = {
+          did,
+          state: typeof stateValue === "string" ? stateValue : null,
+          progress: typeof progressValue === "number" ? progressValue : null,
+        };
+        this.emit("ota", event);
+      }
+      return;
+    }
+
+    if (method === "_otc.info" && params && typeof params === "object") {
+      this.emit("info", parseInfoPush(did, params as Record<string, unknown>));
+      return;
     }
   }
 }
@@ -172,4 +252,30 @@ export function buildStatusTopic(
 ): string {
   // Trailing slash is mandatory — the broker matches it literally.
   return `/status/${device.did}/${uid}/${device.model}/${region}/`;
+}
+
+function parseInfoPush(did: string, params: Record<string, unknown>): InfoPush {
+  const ap = (params["ap"] as Record<string, unknown> | undefined) ?? {};
+  const netif = (params["netif"] as Record<string, unknown> | undefined) ?? {};
+  const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+  const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
+  return {
+    did,
+    hwVer: str(params["hw_ver"]),
+    fwVer: str(params["fw_ver"]),
+    model: str(params["model"]),
+    ap: {
+      // Yes — the device puts the SSID under the key `siid`. Also under `ssid`
+      // on some builds. Try both.
+      ssid: str(ap["ssid"] ?? ap["siid"]),
+      bssid: str(ap["bssid"]),
+      rssi: num(ap["rssi"]),
+    },
+    netif: {
+      localIp: str(netif["localIp"]),
+      mask: str(netif["mask"]),
+      gw: str(netif["gw"]),
+    },
+    raw: params,
+  };
 }
