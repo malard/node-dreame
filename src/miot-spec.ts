@@ -6,7 +6,7 @@
  *   ASSUMED  <source> → borrowed from another project; not yet confirmed
  *
  * Verifications below were all done against `dreame.vacuum.r2532a`
- * (Dreame X50 Ultra Complete, EU region, firmware 4.3.9_2033) on 2026-05-02.
+ * (Dreame X50 Ultra Complete, EU region, firmware 4.3.9_2199) on 2026-05-02.
  *
  * Borrowed entries come from Tasshack/dreame-vacuum (Mi cloud, generic
  * Dreame profile spanning r2228/r2389/r2449). They tend to hold across the

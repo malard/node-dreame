@@ -52,7 +52,7 @@ const { DreameClient } = require("node-dreame");
 
 ## Supported devices
 
-Built and tested against a **Dreame `r2532a`** (X50 Ultra Complete, EU region, firmware 4.3.9_2033). Other models may work — the auth and transport layer should be model-agnostic — but the property/action catalogue in `miot-spec.ts` is partly verified on r2532a and partly inherited from [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum) (older Dreames on Mi cloud).
+Built and tested against a **Dreame `r2532a`** (X50 Ultra Complete, EU region, firmware 4.3.9_2199). Other models may work — the auth and transport layer should be model-agnostic — but the property/action catalogue in `miot-spec.ts` is partly verified on r2532a and partly inherited from [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum) (older Dreames on Mi cloud).
 
 ### What's verified vs assumed
 
