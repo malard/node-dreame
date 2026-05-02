@@ -12,3 +12,5 @@ export type {
   PropertyWrite,
   PropertyResult,
 } from "./commands.js";
+export { DreameSubscription } from "./mqtt.js";
+export type { PropertyChange, RawMqttEvent } from "./mqtt.js";

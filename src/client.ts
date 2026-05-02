@@ -7,6 +7,7 @@ import type {
 import { DreameAuthError } from "./errors.js";
 import { login, refresh } from "./auth.js";
 import { listDevices } from "./devices.js";
+import { DreameSubscription } from "./mqtt.js";
 import {
   callAction,
   getProperties,
@@ -142,6 +143,17 @@ export class DreameClient {
   async callAction(did: string, action: MiotAction): Promise<unknown> {
     const session = await this.ensureSession();
     return callAction(this.#commonInput(did, session), action);
+  }
+
+  /**
+   * Subscribe to live property changes from a device over MQTT.
+   * Returns an opened subscription — call `.close()` when done.
+   */
+  async subscribe(device: DreameDevice): Promise<DreameSubscription> {
+    const session = await this.ensureSession();
+    const sub = new DreameSubscription({ device, session, region: this.#region });
+    await sub.open();
+    return sub;
   }
 
   /** Discard the current session. */
