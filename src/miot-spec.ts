@@ -105,11 +105,45 @@ export const DIAGNOSTIC_PROP = {
  */
 export const CLOUD_OBJ_PROP = {
   /**
+   * VERIFIED on r2532a: object path string `ali_dreame/<uid>/<did>/<n>`.
+   * The integer suffix appears to bump on every new session/stream.
+   */
+  PATH: { siid: 6, piid: 3 } as const,
+  /**
    * VERIFIED on r2532a after OTA: JSON `{obj_name, md5}` pointing at a
    * cloud-stored binary blob — most likely a fresh map snapshot fetched
    * via the Aliyun OSS bucket. Path format: `ali_dreame/<uid>/<did>/<n>`.
    */
   POINTER_JSON: { siid: 6, piid: 8 } as const,
+} as const;
+
+/**
+ * Camera / video-stream service (siid 10001).
+ *
+ * VERIFIED on r2532a 2026-05-02 — observed transitions when the user enabled
+ * "Remote control" in the Dreamehome app, entered the security PIN, and
+ * began streaming the onboard camera.
+ *
+ * The video stream itself runs over **Aliyun LinkVisual** (Aliyun's IoT
+ * video product), not a Dreame-specific protocol — the device's
+ * `feature` field reads `"video_ali,fastCommand"` to confirm.
+ *
+ * The session metadata pushed here contains everything an Aliyun
+ * LinkVisual SDK client would need to subscribe to the stream
+ * (channelId, session, encryptionKey). The PIN is validated server-side
+ * before the session is created — it never appears on this channel.
+ */
+export const CAMERA_PROP = {
+  /**
+   * VERIFIED — JSON-string with the active stream session.
+   * On idle: `{operType: "end", operation: "monitor", result: 0, status: 0}`.
+   * On start: `{token: "alify", channelId: <iotId>, area: "4",
+   *            operType: "monitor", operation: "start", session: <sessionId>,
+   *            encryptionKey: <hexAesKey>, result: 0, status: 1, df: 1}`.
+   */
+  STREAM_SESSION_JSON: { siid: 10001, piid: 1 } as const,
+  /** VERIFIED — string-typed session/task counter (e.g. "101"). */
+  STREAM_TASK_ID: { siid: 10001, piid: 9 } as const,
 } as const;
 
 /** Battery service. */
@@ -136,20 +170,40 @@ export const SETTINGS_PROP = {
   TIMEZONE: { siid: 8, piid: 1 } as const,
 } as const;
 
-/** Consumables (`*_LEFT` is %, `*_TIME_LEFT` is hours/days). */
+/**
+ * Consumables.
+ *
+ * **Unit convention varies by consumable** — Dreame doesn't keep the same
+ * piid layout across services. Numbers below are the conventions verified
+ * on r2532a (X50 Ultra Complete) firmware 4.3.9_2199:
+ *
+ * |           | piid 1       | piid 2       | piid 3 |
+ * |-----------|--------------|--------------|--------|
+ * | brush 9   | hours-left   | **% left**   | flag=1 |
+ * | brush 10  | hours-left   | **% left**   | flag=1 |
+ * | filter 11 | **% left**   | hours-left   | flag=1 |
+ * | sensor 16 | hours-left   | **days-left** | flag=1 |
+ *
+ * Whichever counter hits zero first triggers the in-app maintenance
+ * notification. Reset action for each is at `siid <X> aiid 1`.
+ */
 export const CONSUMABLE_PROP = {
-  /** ASSUMED Tasshack types.py:651. VERIFIED returned 65 on r2532a (plausible). */
-  MAIN_BRUSH_LEFT: { siid: 9, piid: 2 } as const,
-  /** ASSUMED Tasshack types.py:650. */
+  /** VERIFIED on r2532a — hours of operation remaining before next service. */
   MAIN_BRUSH_TIME_LEFT: { siid: 9, piid: 1 } as const,
-  /** ASSUMED Tasshack types.py:653. VERIFIED returned 48 on r2532a. */
-  SIDE_BRUSH_LEFT: { siid: 10, piid: 2 } as const,
-  /** ASSUMED Tasshack types.py:652. */
+  /** VERIFIED on r2532a — % of life remaining (returned 65 in field). */
+  MAIN_BRUSH_LEFT: { siid: 9, piid: 2 } as const,
+  /** VERIFIED on r2532a — hours of operation remaining. */
   SIDE_BRUSH_TIME_LEFT: { siid: 10, piid: 1 } as const,
-  /** ASSUMED Tasshack types.py:654. VERIFIED returned 30 on r2532a. */
+  /** VERIFIED on r2532a — % of life remaining (returned 48 in field). */
+  SIDE_BRUSH_LEFT: { siid: 10, piid: 2 } as const,
+  /** VERIFIED on r2532a — % of life remaining (returned 30 in field). NOTE convention is reversed from brush. */
   FILTER_LEFT: { siid: 11, piid: 1 } as const,
-  /** ASSUMED Tasshack types.py:655. */
+  /** VERIFIED on r2532a — hours of operation remaining (returned 46 in field). */
   FILTER_TIME_LEFT: { siid: 11, piid: 2 } as const,
+  /** VERIFIED on r2532a 2026-05-02 — hours of cleaning operation remaining. After in-app reset: jumped from 0 → 100. */
+  SENSOR_HOURS_LEFT: { siid: 16, piid: 1 } as const,
+  /** VERIFIED on r2532a 2026-05-02 — DAYS remaining (NOT %). After in-app reset: jumped from 0 → 30. Triggers a "Clean sensors" notification when either this or piid 1 hits 0. */
+  SENSOR_DAYS_LEFT: { siid: 16, piid: 2 } as const,
 } as const;
 
 // ─── Actions ───────────────────────────────────────────────────────────

@@ -41,4 +41,5 @@ export {
   CONSUMABLE_PROP,
   DIAGNOSTIC_PROP,
   CLOUD_OBJ_PROP,
+  CAMERA_PROP,
 } from "./miot-spec.js";
