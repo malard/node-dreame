@@ -66,18 +66,34 @@ export const VACUUM_PROP = {
   /**
    * VERIFIED on r2532a 2026-05-02 — packed bitfield for AI / obstacle-detection
    * sub-options (everything under "Intelligent Obstacle Avoidance" in the app).
-   * Each bit is one toggle. Partial decoding so far:
+   * Each bit is one toggle.
    *
-   *   bit 0 (=1)  always set — role TBD
-   *   bit 1 (=2)  Intelligent Obstacle Avoidance (master)
-   *   bit 2 (=4)  Pictures (capture obstacle photos)
-   *   bit 3 (=8)  unobserved (next AI option in menu)
-   *   bit 4 (=16) Pet Recognition (mirrors FEATURE_CONFIG_JSON.PetPartClean)
-   *   bit 8 (=256) always set — role TBD
+   * Verified-by-toggle on r2532a:
+   *   bit 1 (=2)   Intelligent Obstacle Avoidance (master)
+   *   bit 2 (=4)   Pictures (capture obstacle photos)
+   *   bit 4 (=16)  Pet Recognition (mirrors FEATURE_CONFIG_JSON.PetPartClean)
    *
-   * See GitHub issue for the full decoding task. NB: enabling Pet Recognition
-   * also auto-bumps `AUTO_EMPTY_PROP.FREQUENCY` from Standard to HighFrequency
-   * (asymmetric coupling — disabling Pet Recognition does NOT revert it).
+   * Always set in every observation (role TBD — could be "supported" flags,
+   * could be toggles we never moved, could mean those features are non-toggleable
+   * on this generation):
+   *   bit 0 (=1), bit 8 (=256)
+   *
+   * Unobserved on r2532a:
+   *   bit 3 (=8), bits 5–7
+   *
+   * ASSUMED from Tasshack/dreame-vacuum (older-model decoding — NOT verified
+   * to apply on r2532a; layout may differ on this generation):
+   *   bit 0 = furniture detection
+   *   bit 3 = fluid detection
+   *   bit 5 = obstacle image upload
+   *   bit 6 = AI picture
+   * Bits 1, 2, 4 in Tasshack's older-model decoding match what we verified on
+   * r2532a; the assumed bits above are plausible candidates for the unobserved
+   * positions but should be treated as guesses until toggled.
+   *
+   * NB: enabling Pet Recognition also auto-bumps `AUTO_EMPTY_PROP.FREQUENCY`
+   * from Standard to HighFrequency (asymmetric coupling — disabling Pet
+   * Recognition does NOT revert it).
    */
   AI_OBSTACLE_BITFIELD: { siid: 4, piid: 22 } as const,
   /** ASSUMED Tasshack types.py:594 — cleaning mode (sweep/mop/both). VERIFIED returns 5120 on r2532a — clearly a packed bitfield, the simple `CleaningMode` enum below does NOT apply. Decoded form TBD. */
@@ -131,9 +147,19 @@ export const VACUUM_PROP = {
    * Use the `MopWashWaterLevel` enum.
    */
   MOP_WASH_WATER_LEVEL: { siid: 4, piid: 46 } as const,
-  /** VERIFIED on r2532a — appeared synchronously with detergent toggle. Likely detergent dosage units (value 11 observed). */
+  /**
+   * VERIFIED on r2532a — appeared synchronously with detergent toggle. Likely detergent dosage units (value 11 observed).
+   * TODO: revalidate. Tasshack/dreame-vacuum (dev branch) labels siid 4 piid 56 as
+   * `NUMERIC_MESSAGE_PROMPT`, not a detergent property. The co-firing with the detergent
+   * toggle on r2532a is suggestive but not conclusive — re-toggle detergent in isolation
+   * and toggle each app-side message-prompt setting to confirm which interpretation holds.
+   */
   DETERGENT_DOSAGE_INT: { siid: 4, piid: 56 } as const,
-  /** VERIFIED on r2532a — string-typed twin of DETERGENT_DOSAGE_INT (e.g. "11"). Purpose unclear but co-fires with the int field. */
+  /**
+   * VERIFIED on r2532a — string-typed twin of DETERGENT_DOSAGE_INT (e.g. "11"). Purpose unclear but co-fires with the int field.
+   * TODO: revalidate. Tasshack/dreame-vacuum (dev branch) labels siid 4 piid 57 as
+   * `MESSAGE_PROMPT`. Same caveat as piid 56 above.
+   */
   DETERGENT_DOSAGE_STR: { siid: 4, piid: 57 } as const,
   /**
    * VERIFIED on r2532a: returns a JSON string (yes — string-encoded JSON, not native JSON)
@@ -192,11 +218,14 @@ export const DOCK_PROP = {
    */
   MAST_RAISED: { siid: 27, piid: 6 } as const,
   /**
-   * VERIFIED on r2532a — derived "heater on" flag.
-   * Mirrors `MOP_WASH_TEMP > 0`. When MOP_WASH_TEMP is set to 0 (no heating),
-   * this drops to 0 in the same MQTT batch.
+   * VERIFIED on r2532a — hot-water status read.
+   * Tasshack/dreame-vacuum labels this `HOT_WATER_STATUS` (a status, not a
+   * toggle). On r2532a we observed it tracking `MOP_WASH_TEMP > 0` exactly:
+   * when MOP_WASH_TEMP is set to 0 (no heating), this drops to 0 in the same
+   * MQTT batch. So in practice it behaves as a derived "heater currently on"
+   * flag — but the underlying property is a status field, not a writable toggle.
    */
-  HEATER_ENABLED: { siid: 27, piid: 15 } as const,
+  HOT_WATER_STATUS: { siid: 27, piid: 15 } as const,
   /**
    * VERIFIED on r2532a — Mop-Washing Water Temperature enum (4 values).
    *   0 = Normal (no heating)
@@ -258,10 +287,13 @@ export const DOCK_PROP = {
 /**
  * Schedules service (siid 8) — recurring cleaning schedules.
  *
- * VERIFIED on r2532a 2026-05-02. The schedule lives in a single dash-delimited
- * string at piid 2; multiple schedules likely live at higher piids (untested).
+ * VERIFIED on r2532a 2026-05-02. The property at piid 2 is a string. When
+ * multiple schedule slots are defined the slots are joined with `;` and each
+ * slot is a 9-field dash-delimited string (separator confirmed by Tasshack/
+ * dreame-vacuum's parser on older models — node-dreame's own observation
+ * captured one slot only).
  *
- * **String format** (9 dash-separated fields):
+ * **String format** (per slot, 9 dash-separated fields):
  *
  * ```
  * <id>-<enabled>-<HH:MM>-<weekdays>-<recurring>-<roomScope>-<wetness>-<config>-<rooms>
@@ -269,11 +301,15 @@ export const DOCK_PROP = {
  * ```
  *
  * - `id`         numeric schedule slot id (1 in our tests)
- * - `enabled`    0 = paused, 1 = active
+ * - `enabled`    0 = paused, 1 = active. Tasshack's parser additionally treats
+ *                `2` as enabled and `3` as a "schedule invalid" sentinel; both
+ *                values unobserved by node-dreame on r2532a.
  * - `HH:MM`      24h trigger time
  * - `weekdays`   7-char Mon-Sun bitmap, "1" = run, "0" = skip ("1111111" = daily)
  * - `recurring`  0 = one-shot (runs next matching day, then auto-disables), 1 = repeating
- * - `roomScope`  0 = whole map, 1 = specific rooms
+ * - `roomScope`  0 = whole map, 1 = specific rooms (Tasshack labels this field
+ *                `map_id` — likely a multi-map disambiguation in older firmware
+ *                that has been repurposed as a scope flag on r2532a)
  * - `wetness`    0 in non-Mop modes; 1-32 in Mop modes (16 = Standard default)
  * - `config`     mode-dependent — see below
  * - `rooms`      mode-dependent — see below
@@ -351,9 +387,21 @@ export const AUTO_EMPTY_PROP = {
 } as const;
 
 /**
- * Cloud-storage pointer service (siid 6).
+ * Cloud-storage / map-data service (siid 6).
+ *
+ * This is the channel the live-map decoder reads from. Inline and
+ * out-of-band (OSS-pointer) variants both flow through here; see
+ * `docs/live-map-roadmap.md` for the full envelope format.
  */
 export const CLOUD_OBJ_PROP = {
+  /**
+   * ASSUMED Tasshack `dev` `map.py` (live MAP_DATA channel) — inline map
+   * blob delivered directly via MQTT. Expected to be a base64 string,
+   * optionally with a trailing `,<aes-key>` suffix per the outer-envelope
+   * convention. NOT YET observed flowing on r2532a; capture via
+   * `examples/capture-map-fixtures.ts` to confirm.
+   */
+  MAP_DATA: { siid: 6, piid: 1 } as const,
   /**
    * VERIFIED on r2532a: object path string `ali_dreame/<uid>/<did>/<n>`.
    * The integer suffix appears to bump on every new session/stream.
@@ -365,6 +413,13 @@ export const CLOUD_OBJ_PROP = {
    * via the Aliyun OSS bucket. Path format: `ali_dreame/<uid>/<did>/<n>`.
    */
   POINTER_JSON: { siid: 6, piid: 8 } as const,
+  /**
+   * ASSUMED Tasshack `dev` `map.py` (OLD_MAP_DATA channel) — multiplexed
+   * inline-or-pointer string of the form `"<flag>,<payload>[,<key>]"`,
+   * where `flag=0` means inline base64, `flag=1` means OSS object name.
+   * NOT YET observed on r2532a; capture and disambiguate before relying.
+   */
+  OLD_MAP_DATA: { siid: 6, piid: 13 } as const,
 } as const;
 
 /**
@@ -758,8 +813,11 @@ export const SCHEDULE_FIELD8 = {
  * Plain on/off booleans use `0`/`1`.
  *
  * Verification status notes:
- *   ✓ — toggled live and confirmed
- *   ? — guessed from key name only
+ *   ✓ — toggled live on r2532a and confirmed
+ *   ~ — friendly name imported from Tasshack/dreame-vacuum's
+ *       `DreameVacuumAutoSwitchProperty` enum (older-model context); not yet
+ *       toggle-verified on r2532a, so the label is plausible but not proven.
+ *   ? — guessed from key name only (no Tasshack mapping either)
  */
 export const FEATURE_CONFIG_KEYS = {
   /** ✓ Auto Mop-Drying — boolean (0/1). */
@@ -796,58 +854,60 @@ export const FEATURE_CONFIG_KEYS = {
   MonitorPromptLevel: "MonitorPromptLevel",
   /** ✓ Pet Recognition — mirrors bit 4 of `VACUUM_PROP.AI_OBSTACLE_BITFIELD`. */
   PetPartClean: "PetPartClean",
-  /** ? "Smart Auto Mop" — multi-mode (-1 observed = Off). Exact options unknown. */
+  /** ~ Auto-Recleaning (Tasshack: AUTO_RECLEANING). Multi-mode with -1 = Off (observed); other values not enumerated. */
   SmartAutoMop: "SmartAutoMop",
-  /** ? Hot wash boolean (separate from `MOP_WASH_TEMP` enum). 1 = on. */
+  /** ~ Hot Washing (Tasshack: HOT_WASHING). Boolean; separate from the `MOP_WASH_TEMP` enum which selects the heat level. */
   HotWash: "HotWash",
-  /** ? Mop fully-scalable toggle (?). */
+  /** ? Mop fully-scalable toggle. No Tasshack mapping. */
   MopFullyScalable: "MopFullyScalable",
-  /** ? AI stain detection. */
+  /** ~ Stain Avoidance (Tasshack: STAIN_AVOIDANCE). AI stain detection. */
   StainIdentify: "StainIdentify",
-  /** ? Super-wash mode (intensified). */
+  /** ~ Ultra-Clean Mode (Tasshack: ULTRA_CLEAN_MODE). Intensified wash cycle. */
   SuperWash: "SuperWash",
-  /** ? AI human-follow camera mode. */
+  /** ~ Human Follow camera mode (Tasshack: HUMAN_FOLLOW). */
   MonitorHumanFollow: "MonitorHumanFollow",
-  /** ? Cleaning route algorithm choice. */
+  /** ~ Cleaning Route algorithm choice (Tasshack: CLEANING_ROUTE). See `DreameVacuumCleaningRoute` upstream for likely value space. */
   CleanRoute: "CleanRoute",
-  /** ? Smart-host AI? */
+  /** ~ CleanGenius master toggle (Tasshack: CLEANGENIUS). Likely the on/off for the whole CleanGenius system; pairs with the in-schedule CleanGenius preset bits. */
   SmartHost: "SmartHost",
-  /** ? Carpet-only cleaning mode. */
+  /** ? Carpet-only cleaning mode. No Tasshack mapping. */
   CarpetOnlyClean: "CarpetOnlyClean",
-  /** ? Mop effect setting. */
+  /** ~ Mopping Mode (Tasshack: MOPPING_MODE). Companion to MopEffectSwitch. */
   MopEffectState: "MopEffectState",
-  /** ? Mop effect on/off. */
+  /** ~ Custom Mopping Mode (Tasshack: CUSTOM_MOPPING_MODE). Toggle for an alternative mop-effect profile. */
   MopEffectSwitch: "MopEffectSwitch",
-  /** ? Material direction clean (follow grain). */
+  /** ~ Floor Direction Cleaning (Tasshack: FLOOR_DIRECTION_CLEANING). Aligns mop/sweep direction with floor grain. */
   MaterialDirectionClean: "MaterialDirectionClean",
-  /** ? Detergent reminder/notification. */
+  /** ? Detergent reminder/notification. No Tasshack mapping. */
   DetergentNote: "DetergentNote",
-  /** ? Meticulous twist (thorough scrubbing). -7 observed default. */
+  /** ~ Wider Corner Coverage (Tasshack: WIDER_CORNER_COVERAGE). Default `-7` observed. */
   MeticulousTwist: "MeticulousTwist",
-  /** ? Hardware revision id of the mop. */
+  /** ? Mop scalable hardware revision id. No Tasshack mapping. */
   MopScalableVersion: "MopScalableVersion",
-  /** ? Mop scalable v2 toggle. */
+  /** ~ Mopping Under Furnitures (Tasshack: MOPPING_UNDER_FURNITURES). */
   MopScalable2: "MopScalable2",
-  /** ? Smart-charging mode. */
+  /** ~ Auto-Charging (Tasshack: AUTO_CHARGING). Smart charging mode. */
   SmartCharge: "SmartCharge",
-  /** ? Type of dock back-wash. */
+  /** ~ Self-Clean Frequency (Tasshack: SELF_CLEAN_FREQUENCY). How often the dock back-washes the mop. */
   BackWashType: "BackWashType",
-  /** ? Mop extension frequency. */
+  /** ~ Mop Extend Frequency (Tasshack: MOP_EXTEND_FREQUENCY). How often the mop arm extends. */
   ExtrFreq: "ExtrFreq",
-  /** ? Smart drying mode. */
+  /** ~ Smart Drying mode (Tasshack: SMART_DRYING). */
   SmartDrying: "SmartDrying",
-  /** ? Max-suction toggle. */
+  /** ~ Max Suction Power toggle (Tasshack: MAX_SUCTION_POWER). */
   SuctionMax: "SuctionMax",
-  /** ? "Less collision" — softer obstacle approach. */
+  /** ~ Collision Avoidance (Tasshack: COLLISION_AVOIDANCE). Softer obstacle approach. */
   LessColl: "LessColl",
-  /** ? Cleaning-type selection. */
+  /** ~ Mopping Type (Tasshack: MOPPING_TYPE). See `DreameVacuumMoppingType` upstream — likely Daily/Accurate/Deep on older models. */
   CleanType: "CleanType",
-  /** ? "Lacune mop scalable" — meaning unclear. */
+  /** ~ Gap Cleaning Extension (Tasshack: GAP_CLEANING_EXTENSION). Mop reaches into low-clearance gaps. */
   LacuneMopScalable: "LacuneMopScalable",
-  /** ? Fluctuation confirm result (calibration?). */
+  /** ~ Drainage Confirm Result (Tasshack: DRAINAGE_CONFIRM_RESULT). Output of the dock's drainage calibration. */
   FluctuationConfirmResult: "FluctuationConfirmResult",
-  /** ? Fluctuation test result (calibration?). */
+  /** ~ Drainage Test Result (Tasshack: DRAINAGE_TEST_RESULT). Output of the dock's drainage test. */
   FluctuationTestResult: "FluctuationTestResult",
+  /** ~ Intelligent Stain Cleaning (Tasshack: INTELLIGENT_STAIN_CLEANING). Not yet observed in r2532a's FEATURE_CONFIG payload — added for completeness from Tasshack's enum. */
+  HeavyStainSmart: "HeavyStainSmart",
 } as const;
 
 export type FeatureConfigKey = keyof typeof FEATURE_CONFIG_KEYS;

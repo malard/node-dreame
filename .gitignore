@@ -9,3 +9,7 @@ coverage/
 .tsbuildinfo
 .research/
 *.apk
+
+# Live-map fixtures contain raw OSS object names + per-blob AES keys —
+# keep out of the repo until a sanitization pass exists (roadmap Phase 0).
+test/fixtures/map/
