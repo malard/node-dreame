@@ -82,10 +82,11 @@ If you adopt this for another model, please contribute back what you verify.
 
 ## Reverse-engineering notes
 
-The `notes/` directory in the [research scratchpad](https://github.com/Malard/node-dreame-research) (separate, not public) contains:
-- `auth-flow.md` — endpoint URLs, headers, request/response shapes for auth + device list
-- `ota-flow.md` — observed timeline + envelope shapes from a real firmware update
-- Keyfile dumps + raw event captures used to derive the spec
+For implementers (and for AI agents extending the spec), [`docs/`](./docs) contains:
+
+- [`auth-flow.md`](./docs/auth-flow.md) — endpoint URLs, headers, request/response shapes for auth + device list + MQTT
+- [`ota-flow.md`](./docs/ota-flow.md) — observed timeline + envelope shapes from a real firmware update, including the OTA `props` channel and the `dowloaded` typo
+- [`spec-discovery-methodology.md`](./docs/spec-discovery-methodology.md) — how the property/action catalogue was assembled from a live device, with all the verified mappings and what's still unknown
 
 ## License
 
