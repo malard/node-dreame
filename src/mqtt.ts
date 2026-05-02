@@ -254,7 +254,7 @@ export function buildStatusTopic(
   return `/status/${device.did}/${uid}/${device.model}/${region}/`;
 }
 
-function parseInfoPush(did: string, params: Record<string, unknown>): InfoPush {
+export function parseInfoPush(did: string, params: Record<string, unknown>): InfoPush {
   const ap = (params["ap"] as Record<string, unknown> | undefined) ?? {};
   const netif = (params["netif"] as Record<string, unknown> | undefined) ?? {};
   const str = (v: unknown): string | null => (typeof v === "string" ? v : null);

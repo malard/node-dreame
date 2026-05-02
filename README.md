@@ -1,5 +1,13 @@
 # node-dreame
 
+[![CI](https://github.com/malard/node-dreame/actions/workflows/ci.yml/badge.svg)](https://github.com/malard/node-dreame/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](./package.json)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6.svg?logo=typescript&logoColor=white)](./tsconfig.json)
+[![Tested model](https://img.shields.io/badge/tested-Dreame%20X50%20Ultra%20Complete%20%28r2532a%29-orange.svg)](./docs/spec-discovery-methodology.md)
+[![Issues](https://img.shields.io/github/issues/malard/node-dreame.svg)](https://github.com/malard/node-dreame/issues)
+[![Last commit](https://img.shields.io/github/last-commit/malard/node-dreame.svg)](https://github.com/malard/node-dreame/commits/main)
+
 Node.js client for the **Dreame native cloud** — the backend behind the **Dreamehome** mobile app. Control Dreame robot vacuums from Node, without going via Home Assistant or Xiaomi Mi cloud.
 
 > **Status:** pre-alpha. Auth flow is being reverse-engineered. Public API will change. Do not use in production yet.
