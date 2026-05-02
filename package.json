@@ -1,0 +1,63 @@
+{
+  "name": "node-dreame",
+  "version": "0.0.1",
+  "description": "Node.js client for the Dreame native cloud (Dreamehome app backend). Control Dreame robot vacuums without going via Home Assistant or Xiaomi Mi cloud.",
+  "keywords": [
+    "dreame",
+    "dreamehome",
+    "vacuum",
+    "robot-vacuum",
+    "smart-home",
+    "iot",
+    "mqtt",
+    "miot"
+  ],
+  "license": "MIT",
+  "author": "Martin Ellis (@Malard)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Malard/node-dreame.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Malard/node-dreame/issues"
+  },
+  "homepage": "https://github.com/Malard/node-dreame#readme",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
