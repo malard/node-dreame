@@ -1,7 +1,9 @@
 # Live Map — Roadmap
 
-> **Status:** Phases 0-2 done; Phase 3 (Cloud OSS fetch helper / wiring
-> into a manager) is the next deliverable.
+> **Status:** Phases 0-4 done. The decoder, merge, OSS fetcher, and the
+> `MapManager` state machine are all shipped and unit-tested. Phase 5
+> (lazy `DreameDevice.map` getter + `package.json` `exports` field for
+> the `node-dreame/map` sub-import) is the next deliverable.
 > Source of binary-format truth is
 > [`Tasshack/dreame-vacuum`](https://github.com/Tasshack/dreame-vacuum)
 > on the **`dev` branch** (commit `bba1d35`, v2.0.0b23) — specifically
@@ -163,8 +165,8 @@ prev I-frame's dimensions with each P-frame's bbox before merging.
 ## Goal
 
 Decode Dreame's encrypted/compressed live-map binary into structured JSON so
-that a web UI can render walls, segments, the robot pose, the
-dock, the cleaning path, and obstacles in the browser.
+that a web UI can render walls, segments, the robot pose, the dock, the
+cleaning path, and obstacles in the browser.
 
 **Out of scope for v1:** server-side image rendering. The browser does the
 drawing. We never produce PNGs.
@@ -534,83 +536,130 @@ of the original plan:
   gap. Resolved as: extend `MapLayerType` with `"carpet"` and emit a
   parallel run-length layer. Additive — old renderers ignore it.
 
-### Phase 3 — Cloud OSS fetch (Dreamehome) (~2-3 hours)
+### Phase 3 — Cloud OSS fetch — DONE (2026-05-03)
 
-`src/map/oss-fetch.ts`:
+Shipped in `src/map/oss-fetch.ts` as the `OssFetcher` class. The plan
+above was based on the Tasshack Mi-cloud endpoint
+(`/v2/home/get_interim_file_url_pro`) — our Dreamehome equivalent is
+`/dreame-user-iot/iotfile/getDownloadUrl` (verified live on r2532a),
+documented in the "I-frames live in OSS" block above.
 
-1. **Resolve object name → URL.** Endpoint:
-   `POST /v2/home/get_interim_file_url_pro` (Tasshack `protocol.py:1162`).
-   Body: `{"obj_name": "<obj_name>"}`. Headers: existing
-   `dreame-auth: bearer <token>` from the auth flow.
-   Response: `{"result": {"url": "<signed-aliyun-url>"}}`. Falls back to
-   non-`_pro` endpoint on `code == -8`.
-2. **HTTP GET the signed URL.** No special headers; Aliyun-signed.
-3. **30-minute URL cache** — cache by `obj_name`, return the same URL with
-   `?current=<unix_ts>` appended on cache hit.
-4. **For permanent files** (recovery maps): `POST /home/getfileurl_v3`,
-   body `{"obj_name": "<name>"}`. Same response shape.
+Contract:
 
-Test: mock the cloud endpoint, verify request shape; integration test
-against a real captured `obj_name` if cloud is reachable.
+- `resolveUrl(input)` POSTs `{did, model, filename, region}` to the
+  endpoint and returns the signed URL. Strict on the response — `data`
+  must be the URL string itself; the nested `{data:{url}}` shape from
+  the probe script's defensive fallback is intentionally rejected.
+- `fetchBlob(input)` resolves then GETs the signed URL and returns the
+  bytes. The OSS body is the same URL-safe base64 envelope as the live
+  channel — feeds into `unwrapEnvelope` directly.
+- 30-min URL cache keyed by `did:filename`. On cache hit the URL is
+  returned with `current=<unix_ts>` appended (`&` separator if the URL
+  already has a `?`, which signed Aliyun URLs always do).
+- Constructed from primitives (host, accessToken, region, did, model)
+  — does NOT take a `DreameClient`, so it stays unit-testable without
+  a live login. The `MapManager` (Phase 4) holds one per session.
+- Permanent saved-map endpoint (`getOss1dDownloadUrl`) is intentionally
+  unimplemented — v1 only handles live blobs. The probe script
+  (`examples/probe-oss-iframe.ts`) keeps a fallback to it; that's
+  exploration code, not the helper's contract.
 
-### Phase 4 — MapManager (~3-4 hours)
+### Phase 4 — MapManager — DONE (2026-05-03)
 
-`src/map/manager.ts` — bolted on to `DreameDevice`. Subscribes to:
+Shipped in `src/map/manager.ts`. `MapManager extends EventEmitter` and
+emits `'map'` (decoded `MapData`) and `'error'` (`Error`).
 
-- `siid 6 piid 1` (`MAP_DATA`) — inline blob, decode immediately.
-- `siid 6 piid 3` (`PATH`) — already in node-dreame as `CLOUD_OBJ_PROP.PATH`. Re-purpose / clarify.
-- `siid 6 piid 8` (`POINTER_JSON`) — `{obj_name, md5}`. Fetch via OSS, decode.
-- `siid 6 piid 13` (`OLD_MAP_DATA`) — `"<flag>,<inline-or-objname>[,key]"`. Disambiguate by leading flag (`0` = inline, `1` = OSS).
+Subscribes to:
 
-Manager state:
-
-```ts
-class MapManager extends EventEmitter {
-  current: MapData | null = null;
-  currentMapId: number | null = null;
-  currentFrameId: number | null = null;
-  pendingPFrames: MapDataPartial[] = [];     // queue out-of-order
-
-  on('map', (md: MapData) => void);          // emitted on every successful decode
-  on('error', (err: MapError) => void);
-}
-```
-
-Frame sequencing:
-- I-frame: replace state, drain queue.
-- P-frame with expected `frameId`: apply, advance, drain queue.
-- P-frame too-far-ahead: queue. If queue size > 4, request the missing
-  P-frame (`MAP_RECOVERY` action, see map.py:550). If > 8, request a full
+- `siid 6 piid 1` (`MAP_DATA`) — inline base64 envelope. On r2532a
+  fsm:1 only P-frames have been observed flowing here, but the manager
+  inspects the header and dispatches I/P regardless.
+- `siid 6 piid 3` (`PATH`) — OSS object name string (the live
+  I-frame). Resolved through `OssFetcher.fetchBlob` and ingested as an
   I-frame.
-- Stale frames (timestamp < current): drop silently.
+- `siid 6 piid 8` (`POINTER_JSON`) — JSON `{obj_name, md5}` pointer.
+  Same code path as PATH; `md5` is currently unused (could later dedup
+  by content hash).
+- `siid 6 piid 13` (`OLD_MAP_DATA`) — **intentionally unhandled** until
+  observed live on r2532a. The flag-prefixed shape `<flag>,<payload>`
+  needs disambiguation that we don't have a fixture for.
 
-Test with replay of captured fixtures in time-order.
+Frame sequencing (matches the original plan):
+- I-frame replaces baseline + drains pending queue.
+- In-order P-frame merges via `mergePFrame` and emits.
+- Out-of-order P-frame queues by `frame_id`.
+- Stale: P-frame with `frame_id <= current` dropped silently. I-frame
+  with same `mapId` and strictly older `frame_id` dropped (guards
+  against an OSS-stored I-frame being older than the running merged
+  state).
+- Recovery: queue size > `recoverGap` (default 4) → `requestPFrame`
+  for the missing frame; queue size > `pendingMax` (default 8) → clear
+  the queue and `requestIFrame`. Both thresholds are constructor opts.
+- `map_id` mismatch on a P-frame: `reset()` + `requestIFrame`.
+- P-frame before any I-frame: `requestIFrame` (don't queue — without a
+  baseline the gap is unbounded).
 
-### Phase 5 — Public API & sub-export (~1 hour)
+Construction surface (designed for unit testability):
 
 ```ts
-// src/index.ts (no change for users who don't want maps)
-export { DreameClient } from './client.js';
-
-// src/map/index.ts (sub-export node-dreame/map)
-export { MapDecoder } from './decoder.js';
-export { MapManager } from './manager.js';
-export type { MapData, ... } from './types.js';
+new MapManager({
+  source: EventEmitter,         // emits 'properties' with PropertyChange[]
+  did: string,
+  ossFetcher: OssFetcher,
+  ossInput: { host, accessToken, region, country?, lang?, did, model },
+  frameRequester: FrameRequester,  // { requestIFrame, requestPFrame }
+  recoverGap?: number, pendingMax?: number, logger?,
+})
 ```
 
-Wire `MapManager` to `DreameDevice` via an optional `device.map` getter that
-constructs the manager lazily — users who don't access `.map` don't pay.
+For production wiring, `clientFrameRequester(client, did)` bridges the
+existing `requestIFrame`/`requestPFrame` helpers into the
+`FrameRequester` interface. Tests pass a fake requester that records
+the calls.
 
-`package.json` `exports` field:
+Test coverage in `test/map.manager.test.ts` (17 tests, synthetic
+frames via zlib+base64 wrap, bare `EventEmitter` source, real
+`OssFetcher` + `mockFetch`): inline I/P happy path, queue + drain,
+stale drop, recovery thresholds, map_id mismatch, OSS pointer ingest,
+duplicate-PATH dedupe, fetch-error retry, irrelevant-push filtering,
+start/stop/reset.
 
-```json
-{
-  "exports": {
-    ".": "./dist/index.js",
-    "./map": "./dist/map/index.js"
-  }
-}
-```
+### Phase 5 — Public API & sub-export (~1 hour) — NEXT
+
+`src/map/index.ts` already re-exports the decoder, merge helpers,
+request helpers, `OssFetcher`, `MapManager`, and `clientFrameRequester`.
+What's still missing for Phase 5:
+
+1. **`package.json` `exports` field** — add the sub-import path so
+   consumers can `import { MapManager } from "node-dreame/map"`. The
+   build (`tsup`) needs a corresponding entry to emit
+   `dist/map/index.{js,cjs,d.ts}`.
+
+   ```json
+   {
+     "exports": {
+       ".": {
+         "types": "./dist/index.d.ts",
+         "import": "./dist/index.js",
+         "require": "./dist/index.cjs"
+       },
+       "./map": {
+         "types": "./dist/map/index.d.ts",
+         "import": "./dist/map/index.js",
+         "require": "./dist/map/index.cjs"
+       }
+     }
+   }
+   ```
+
+2. **Lazy `device.map` getter** — open question whether this lives on
+   `DreameDevice` or `Vacuum`. Lazily constructs a `MapManager` from a
+   `DreameClient` + an opened `DreameSubscription`, so users who don't
+   access `.map` don't pay the dependency cost. Should auto-call
+   `.start()` on first access (or expose explicit start/stop).
+
+3. **README + a usage example** under `examples/live-map-stream.ts` so
+   the public surface has a working reference.
 
 ### Phase 6 — Browser rendering (out of scope for this lib)
 
@@ -618,7 +667,7 @@ A consumer rendering `MapData` in the browser would typically:
 
 1. Subscribe to `MapManager` events through whatever transport the
    consuming app uses.
-2. Render in-browser via Canvas or SVG.
+2. Render via Canvas or SVG.
 3. Coordinate transform: `screen_x = (mm_x - left) / gridSize * pixelScale`,
    `screen_y = (mm_y - top) / gridSize * pixelScale` (or flipped Y depending
    on choice).
