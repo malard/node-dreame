@@ -1,5 +1,11 @@
 # Spec Discovery Methodology
 
+> **This document covers what's been mapped so far, not a complete spec.**
+> Coverage of the r2532a's surface is partial — see the [README's Coverage
+> section](../README.md#coverage-status) for the honest summary. This
+> methodology doc is meant to make it cheap for the next person (or AI
+> agent) to add observations and extend the catalogue.
+
 How the property/action catalogue in `src/miot-spec.ts` was assembled
 against a live `dreame.vacuum.r2532a` (X50 Ultra Complete, EU region,
 firmware `4.3.9_2199`). Documenting it so the same approach can extend

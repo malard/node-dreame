@@ -60,33 +60,48 @@ const { DreameClient } = require("node-dreame");
 
 ## Supported devices
 
-Built and tested against a **Dreame `r2532a`** (X50 Ultra Complete, EU region, firmware 4.3.9_2199). Other models may work — the auth and transport layer should be model-agnostic — but the property/action catalogue in `miot-spec.ts` is partly verified on r2532a and partly inherited from [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum) (older Dreames on Mi cloud).
+Developed against a **Dreame `r2532a`** (X50 Ultra Complete, EU region, firmware 4.3.9_2199). Other models may work — the auth and transport layer should be model-agnostic — but the property/action catalogue in `miot-spec.ts` is partly verified on r2532a and partly inherited from [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum) (older Dreames on Mi cloud).
 
-### What's verified vs assumed
+### Coverage status
+
+This is **a partial mapping, not a complete one**. We've prioritised the surface most useful for home-automation integration (dock settings, OTA, schedules, a handful of actions), but large parts of the device's feature set haven't been observed yet.
+
+Roughly:
+
+- **Well-mapped:** auth + transport, MQTT event channels, dock settings, OTA flow, the global Custom-mode schedule format, basic battery/charge/state.
+- **Partly mapped:** MIoT state enum (we have all the keyDefine translations, but only a subset have been observed in real transitions); FEATURE_CONFIG_JSON keys (3 of ~36 confirmed by toggle, the rest documented by name only).
+- **Hardly touched:** actual cleaning runs, room-targeted cleaning behaviour, per-room schedule packing, the `0xC249` middle bits of the global Custom-mode int, voice configuration, DND scheduling, error-code catalogue, AI object-detection class IDs, the siid 6 / siid 99 binary blobs (likely live map + telemetry), and the many siid 4 piids we never observed move.
 
 Each entry in `src/miot-spec.ts` is annotated:
 
-- `// VERIFIED <date>` — observed working on r2532a in front of us
-- `// ASSUMED from <source>` — borrowed; not yet confirmed on r2532a
+- `// VERIFIED <date>` — observed working on r2532a
+- `// ASSUMED from <source>` — borrowed from another project, not yet confirmed on r2532a
 
-Confirmed VERIFIED on r2532a:
+If a behaviour you care about isn't VERIFIED, treat it as a guess. If you exercise something new, please contribute the finding back — the methodology is documented in [`docs/spec-discovery-methodology.md`](./docs/spec-discovery-methodology.md) and the long-running logger in `examples/log-events.ts` makes it cheap to add observations.
 
-- Auth + device discovery
-- MQTT subscription incl. typed `properties_changed`, `props`, `_otc.info`, OTA progress channel
-- Property reads: state, error, battery, charging, suction, water, cleaning_mode (raw), task_status (raw), volume, consumables, firmware build, serial, timezone, DND config JSON, feature toggles JSON, version metadata
-- Property writes: round-trip no-op write
-- Actions: `LOCATE`, `TEST_SOUND`, `CLEAR_WARNING`
-- The `MiotState` enum (siid 2 piid 1) — values 13, 14, 2, 6 transitions confirmed live during an OTA cycle
-- OTA observation end-to-end (download → install → reboot → re-online → version flip from `4.3.9_2033` → `4.3.9_2199`) via the `props` channel
-- `DreameDeviceOfflineError` (cloud code 80001) distinguished from other API errors
+### Known specifically-verified pieces
 
-ASSUMED (works on older Dreames, untested on r2532a):
+- Auth + device discovery + MQTT subscription
+- Typed event channels: `properties_changed`, `props` (incl. OTA), `_otc.info`
+- Property reads (state, error, battery, charging, suction, water, cleaning_mode raw, task_status raw, volume, consumables, firmware build, serial, timezone, DND config JSON, feature toggles JSON, version metadata)
+- Property writes (round-trip verified)
+- Actions: `LOCATE`, `TEST_SOUND`, `CLEAR_WARNING` only
+- Full OTA cycle (download → install → reboot → re-online → version flip)
+- All dock settings reachable from the Dreamehome app's "Base Station" menu
+- Cleaning-schedule string format (CleanGenius preset + Custom-global; Custom per-room is structural only — see [issue #1](https://github.com/malard/node-dreame/issues/1))
+- `DreameDeviceOfflineError` distinguished from other API errors
 
-- Actions: `START`, `PAUSE`, `STOP`, `CHARGE`/dock, `START_AUTO_EMPTY`, all reset actions
-- Enums: `SuctionLevel`, `WaterVolume`, `ChargingStatus`, `CleaningMode` (the last is known to be a packed bitfield on r2532a — raw int returned 5120; the simple 0–3 enum doesn't apply)
-- The `TASK_STATUS` field at siid 4 piid 1 — we read it as a raw int but have no enum mapping for r2532a (Tasshack's older-model values do not match observation)
+### Known specifically-NOT-verified pieces
 
-If you adopt this for another model, please contribute back what you verify.
+- Actions `START`, `PAUSE`, `STOP`, `CHARGE`/dock, `START_AUTO_EMPTY`, `START_WASHING`, all `RESET_*` — wired with Tasshack's older-model siid:aiid values, but no live test
+- `SuctionLevel`, `WaterVolume`, `ChargingStatus`, `CleaningMode` enum behaviour during actual cleaning (settings reads work; downstream effects untested)
+- `TASK_STATUS` (siid 4 piid 1) — raw int only; values 3, 6, 13, 14, 17, 23 observed in different states without a clean mapping
+- `CleaningMode` (siid 4 piid 23) — known to be a packed bitfield on r2532a (raw 5120 in baseline); not decoded
+- Per-room schedule packed-int format
+- `0xC249` middle bits of the Custom-mode global schedule int
+- The `siid 99 piid 98` and `siid 6 piid 1` compressed blobs (likely telemetry + live map)
+- AI object-detection class catalog (we see bbox class id 160 repeatedly; other class IDs not observed)
+- Most of the `FEATURE_CONFIG_KEYS` (~33 documented by name only)
 
 ## Reverse-engineering notes
 
