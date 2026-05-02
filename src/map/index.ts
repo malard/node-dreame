@@ -27,6 +27,9 @@ export type { RequestIFrameOptions, RequestPFrameOptions } from "./request.js";
 
 export { mergePFrame, mergePFrameEnvelope, OutOfOrderFrameError } from "./merge.js";
 
+export { OssFetcher } from "./oss-fetch.js";
+export type { OssFetchInput, OssFetcherOpts } from "./oss-fetch.js";
+
 export type {
   MapData,
   MapDecodeOptions,
