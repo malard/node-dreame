@@ -52,7 +52,30 @@ const { DreameClient } = require("node-dreame");
 
 ## Supported devices
 
-This is being developed against a Dreame `r2532a`. Other models may need property mapping additions — contributions welcome.
+Built and tested against a **Dreame `r2532a`** (X50 Ultra Complete, EU region, firmware 4.3.9_2033). Other models may work — the auth and transport layer should be model-agnostic — but the property/action catalogue in `miot-spec.ts` is partly verified on r2532a and partly inherited from [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum) (older Dreames on Mi cloud).
+
+### What's verified vs assumed
+
+Each entry in `src/miot-spec.ts` is annotated:
+
+- `// VERIFIED <date>` — observed working on r2532a in front of us
+- `// ASSUMED from <source>` — borrowed; not yet confirmed on r2532a
+
+Confirmed VERIFIED on r2532a:
+
+- Auth + device discovery + MQTT subscription
+- Property reads: state, error, battery, charging, suction, water, cleaning_mode (raw), task_status (raw), volume, consumables
+- Property writes: round-trip no-op write
+- Actions: `LOCATE`, `TEST_SOUND`, `CLEAR_WARNING`
+- The `MiotState` enum (siid 2 piid 1) — values come from the device's own translated keyDefine
+
+ASSUMED (works on older Dreames, untested on r2532a):
+
+- Actions: `START`, `PAUSE`, `STOP`, `CHARGE`/dock, `START_AUTO_EMPTY`, all reset actions
+- Enums: `SuctionLevel`, `WaterVolume`, `ChargingStatus`, `CleaningMode`
+- The `TASK_STATUS` field at siid 4 piid 1 — we read it as a raw int but have no enum mapping for r2532a (Tasshack's older-model values do not match observation)
+
+If you adopt this for another model, please contribute back what you verify.
 
 ## License
 

@@ -17,7 +17,7 @@ export type { PropertyChange, RawMqttEvent } from "./mqtt.js";
 export { Vacuum } from "./vacuum.js";
 export type { VacuumState } from "./vacuum.js";
 export {
-  VacuumStatus,
+  MiotState,
   ChargingStatus,
   SuctionLevel,
   WaterVolume,
