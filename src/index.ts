@@ -33,6 +33,10 @@ export {
   SuctionLevel,
   WaterVolume,
   CleaningMode,
+  MopWashTemp,
+  MopWashWaterLevel,
+  MopDryMode,
+  AutoEmptyFrequency,
   DEVICE_PROP,
   VACUUM_PROP,
   VACUUM_ACTION,
@@ -42,4 +46,12 @@ export {
   DIAGNOSTIC_PROP,
   CLOUD_OBJ_PROP,
   CAMERA_PROP,
+  DOCK_PROP,
+  AUTO_EMPTY_PROP,
+  FEATURE_CONFIG_KEYS,
+} from "./miot-spec.js";
+export type {
+  DryingTimeHours,
+  FeatureConfigKey,
+  FeatureConfigEntry,
 } from "./miot-spec.js";

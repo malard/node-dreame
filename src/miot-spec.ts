@@ -51,16 +51,48 @@ export const VACUUM_PROP = {
   CLEANED_AREA: { siid: 4, piid: 3 } as const,
   /** ASSUMED Tasshack types.py:575 — suction level enum (see SuctionLevel). */
   SUCTION_LEVEL: { siid: 4, piid: 4 } as const,
-  /** ASSUMED Tasshack types.py:576 — water flow level enum (see WaterVolume). */
+  /**
+   * ASSUMED Tasshack types.py:576 — water flow level **during active cleaning**
+   * (mop on the floor). NOT to be confused with `MOP_WASH_WATER_LEVEL` (siid 4
+   * piid 46) which is the dock's wash-cycle water amount.
+   */
   WATER_VOLUME: { siid: 4, piid: 5 } as const,
-  /** ASSUMED Tasshack types.py:587 — JSON payload for joystick control. */
+  /** ASSUMED Tasshack types.py:587 — JSON payload for joystick control. Note: live joystick during the camera/remote-control session appears to bypass this and use a side-channel through the Aliyun video session (no MQTT echoes for joystick movement). */
   REMOTE_CONTROL: { siid: 4, piid: 15 } as const,
-  /** ASSUMED Tasshack types.py:594 — cleaning mode (sweep/mop/both). VERIFIED returns 5120 on r2532a — likely a packed bitfield, NOT the simple enum below. */
+  /** ASSUMED Tasshack types.py:594 — cleaning mode (sweep/mop/both). VERIFIED returns 5120 on r2532a — clearly a packed bitfield, the simple `CleaningMode` enum below does NOT apply. Decoded form TBD. */
   CLEANING_MODE: { siid: 4, piid: 23 } as const,
-  /** ASSUMED Tasshack types.py:606 — auto mop-wash mid-job toggle. */
+  /**
+   * VERIFIED on r2532a 2026-05-02 — the **Auto Mop-Washing** boolean
+   * (auto-rewashes the mop pad mid-job at intervals).
+   * Observed transitions: 1 → 0 → 1 with each app toggle.
+   * Tasshack labelled this `SELF_CLEAN`; we keep that name for back-compat
+   * but `AUTO_MOP_WASH` is the user-facing label on r2532a.
+   */
   SELF_CLEAN: { siid: 4, piid: 34 } as const,
-  /** ASSUMED Tasshack types.py:612 — drying time enum. */
+  /**
+   * VERIFIED on r2532a 2026-05-02 — Mop-Drying duration in hours, bounded enum.
+   * Confirmed values: 2, 3, 4. Other values not selectable in app.
+   * Use the `DryingTimeHours` type for type-safe writes.
+   */
   DRYING_TIME: { siid: 4, piid: 40 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — boolean for "Mop-Washing with Detergent"
+   * (whether the dock injects detergent during the mop wash cycle).
+   */
+  MOP_WASH_DETERGENT_ENABLED: { siid: 4, piid: 37 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — Mop-Washing Water Level enum (how much
+   * water the dock uses for the wash cycle — NOT the cleaning-time water flow).
+   *   0 = Water Saving
+   *   1 = Standard
+   *   2 = Deep
+   * Use the `MopWashWaterLevel` enum.
+   */
+  MOP_WASH_WATER_LEVEL: { siid: 4, piid: 46 } as const,
+  /** VERIFIED on r2532a — appeared synchronously with detergent toggle. Likely detergent dosage units (value 11 observed). */
+  DETERGENT_DOSAGE_INT: { siid: 4, piid: 56 } as const,
+  /** VERIFIED on r2532a — string-typed twin of DETERGENT_DOSAGE_INT (e.g. "11"). Purpose unclear but co-fires with the int field. */
+  DETERGENT_DOSAGE_STR: { siid: 4, piid: 57 } as const,
   /**
    * VERIFIED on r2532a: returns a JSON string (yes — string-encoded JSON, not native JSON)
    * containing an array of `{k, v}` objects representing the full feature toggle config:
@@ -98,6 +130,86 @@ export const DIAGNOSTIC_PROP = {
    * models (e.g. human v2.0.2, obstacle_instance v4.5.7) and MR527 platform name.
    */
   AI_MODELS_JSON: { siid: 99, piid: 94 } as const,
+} as const;
+
+/**
+ * Dock service (siid 27 + siid 28 cluster — sister services on r2532a's base station).
+ *
+ * The dock-side settings (mop-wash temperature, mop-drying mode, hair compression,
+ * smart-mode master toggle, mast control) are split across these two siids in a
+ * way Tasshack's older mapping doesn't cover. All entries here are VERIFIED by
+ * directly toggling them in the Dreamehome app and observing the MQTT echo.
+ */
+export const DOCK_PROP = {
+  /**
+   * VERIFIED on r2532a — boolean for the **elevating LiDAR/camera mast**
+   * (the X50 Ultra Complete's signature feature — extends ~10cm above the
+   * robot body so the LiDAR can see over low obstacles).
+   *   1 = mast raised
+   *   0 = mast lowered
+   */
+  MAST_RAISED: { siid: 27, piid: 6 } as const,
+  /**
+   * VERIFIED on r2532a — derived "heater on" flag.
+   * Mirrors `MOP_WASH_TEMP > 0`. When MOP_WASH_TEMP is set to 0 (no heating),
+   * this drops to 0 in the same MQTT batch.
+   */
+  HEATER_ENABLED: { siid: 27, piid: 15 } as const,
+  /**
+   * VERIFIED on r2532a — Mop-Washing Water Temperature enum (4 values).
+   *   0 = Normal (no heating)
+   *   1 = Mild
+   *   2 = Warm
+   *   3 = High Temperature
+   * Use the `MopWashTemp` enum.
+   */
+  MOP_WASH_TEMP: { siid: 28, piid: 8 } as const,
+  /**
+   * VERIFIED on r2532a — Smart Mop-Washing master toggle.
+   * When `1`, the device chooses water level / temperature / frequency
+   * automatically; the manual settings get greyed out in the app.
+   * Distinct from `SmartAutoWash` in `FEATURE_CONFIG_JSON` — that's a
+   * different feature ("Auto Mop-Rewashing" mid-job).
+   */
+  SMART_MOP_WASH: { siid: 28, piid: 22 } as const,
+  /**
+   * VERIFIED on r2532a — Mop-Drying Mode boolean.
+   *   0 = Standard
+   *   1 = Mute (slower, quieter)
+   * Duration is independent — see `DRYING_TIME` (siid 4 piid 40).
+   */
+  MOP_DRY_MODE: { siid: 28, piid: 27 } as const,
+  /**
+   * VERIFIED on r2532a — Hair Compression boolean (dock compacts collected hair).
+   */
+  HAIR_COMPRESSION: { siid: 28, piid: 28 } as const,
+  /**
+   * VERIFIED on r2532a — Robot "in motion" flag. Flips 0→1 when the robot
+   * undocks / starts moving and 1→0 when it docks / stops. Useful for cleanly
+   * detecting motion start/stop edges without polling status.
+   */
+  MOTION_FLAG: { siid: 28, piid: 4 } as const,
+} as const;
+
+/**
+ * Auto-Empty service (siid 15) — dust bag / debris evacuation.
+ */
+export const AUTO_EMPTY_PROP = {
+  /**
+   * VERIFIED on r2532a — Auto-Empty frequency mode enum (4 values).
+   *   0 = Off
+   *   1 = Standard
+   *   2 = High Frequency
+   *   3 = Low Frequency
+   * Note the values are arbitrary mode ids, not a numeric "frequency" scale —
+   * 2 and 3 are not in expected order. Use the `AutoEmptyFrequency` enum.
+   */
+  FREQUENCY: { siid: 15, piid: 1 } as const,
+  /**
+   * VERIFIED on r2532a — boolean asserting when the robot is on the dock
+   * and the auto-empty service is ready (1 = docked & idle, 0 = away).
+   */
+  ON_DOCK_FLAG: { siid: 15, piid: 3 } as const,
 } as const;
 
 /**
@@ -142,8 +254,29 @@ export const CAMERA_PROP = {
    *            encryptionKey: <hexAesKey>, result: 0, status: 1, df: 1}`.
    */
   STREAM_SESSION_JSON: { siid: 10001, piid: 1 } as const,
-  /** VERIFIED — string-typed session/task counter (e.g. "101"). */
-  STREAM_TASK_ID: { siid: 10001, piid: 9 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — front camera fill-light brightness as
+   * a string-typed integer.
+   *
+   *   "0"–"100"  — manual brightness percentage (perceptually logarithmic
+   *                in the app slider — "half way" on the slider reads ~70-76)
+   *   "101"      — sentinel meaning auto / off (set when not in manual mode)
+   *
+   * The slider is roughly square-root scaled (slider position² / 100 ≈ value).
+   * (Previous tentative label `STREAM_TASK_ID` was wrong — the value "101"
+   * just coincided with stream-start, when the light was in auto mode.)
+   */
+  FILL_LIGHT_BRIGHTNESS: { siid: 10001, piid: 9 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — real-time on-device AI object detection
+   * feed, pushed via MQTT at ~10-30 fps while the camera is active.
+   * Each push is a JSON-string of:
+   *   `{ timestamp: <microseconds>, boxlist: [{type: <classId>, bbox: [x,y,w,h]}, ...] }`
+   * Coordinates are normalized 0-1. `type` is an integer class id; class 160
+   * appears repeatedly during dock-hunting (likely "obstacle/unknown").
+   * The model catalog itself lives at `DIAGNOSTIC_PROP.AI_MODELS_JSON`.
+   */
+  AI_DETECTION_FEED: { siid: 10001, piid: 112 } as const,
 } as const;
 
 /** Battery service. */
@@ -309,15 +442,22 @@ export enum MiotState {
 }
 
 /**
- * ASSUMED Tasshack mapping for siid 3 piid 2.
- * VERIFIED on r2532a we observed value `1` while charging — consistent.
- * Other values not yet observed; treat with caution.
+ * VERIFIED enum for **siid 3 piid 2 (ChargingStatus)** on r2532a.
+ *
+ * Values 1, 2, 5 confirmed by direct observation across an undock → drive
+ * → return-to-dock → recharge cycle on 2026-05-02. The Tasshack mapping
+ * (`ChargedComplete=2`, `ChargingError=5`) was wrong for this generation —
+ * value 2 actually means "off-dock / discharging" and value 5 means
+ * "returning to dock".
+ *
+ * Other values (charged-complete, error states) not yet observed; the
+ * device may use other ints or may simply leave this at 1 when fully
+ * charged on the dock.
  */
 export enum ChargingStatus {
-  NotCharging = 0,
   Charging = 1,
-  ChargedComplete = 2,
-  ChargingError = 5,
+  Discharging = 2,
+  Returning = 5,
 }
 
 /** ASSUMED Tasshack — siid 4 piid 4 enum. NOT YET observed on r2532a. */
@@ -346,4 +486,146 @@ export enum CleaningMode {
   Mopping = 1,
   SweepAndMop = 2,
   MopAfterSweep = 3,
+}
+
+// ─── Dock setting enums (all VERIFIED on r2532a 2026-05-02) ───────────
+
+/** Mop-Washing Water Temperature (`DOCK_PROP.MOP_WASH_TEMP`). */
+export enum MopWashTemp {
+  Normal = 0,
+  Mild = 1,
+  Warm = 2,
+  High = 3,
+}
+
+/** Mop-Washing Water Level (`VACUUM_PROP.MOP_WASH_WATER_LEVEL`). */
+export enum MopWashWaterLevel {
+  WaterSaving = 0,
+  Standard = 1,
+  Deep = 2,
+}
+
+/** Mop-Drying Mode (`DOCK_PROP.MOP_DRY_MODE`). */
+export enum MopDryMode {
+  Standard = 0,
+  Mute = 1,
+}
+
+/** Auto-Empty Frequency (`AUTO_EMPTY_PROP.FREQUENCY`). Arbitrary mode ids — values aren't ordered by frequency. */
+export enum AutoEmptyFrequency {
+  Off = 0,
+  Standard = 1,
+  HighFrequency = 2,
+  LowFrequency = 3,
+}
+
+/** Mop-Drying duration in hours — bounded set. */
+export type DryingTimeHours = 2 | 3 | 4;
+
+// ─── FEATURE_CONFIG_JSON (siid 4 piid 50) keys ────────────────────────
+
+/**
+ * Known keys inside the JSON-string at `VACUUM_PROP.FEATURE_CONFIG_JSON`.
+ *
+ * This single property mirrors a large section of the Dreamehome settings
+ * menu as a JSON-string `[{k: <name>, v: <int>}, ...]` array. Writing back
+ * requires reconstructing the full array (no per-key sub-protocol).
+ *
+ * **Universal "off" sentinel:** Dreame uses `-1` (NOT `0`) as the disabled
+ * value for multi-mode keys (`SmartAutoWash`, `SmartAutoMop`, `MeticulousTwist`).
+ * Plain on/off booleans use `0`/`1`.
+ *
+ * Verification status notes:
+ *   ✓ — toggled live and confirmed
+ *   ? — guessed from key name only
+ */
+export const FEATURE_CONFIG_KEYS = {
+  /** ✓ Auto Mop-Drying — boolean (0/1). */
+  AutoDry: "AutoDry",
+  /** ✓ UV Sterilization — boolean (0/1). */
+  UVLight: "UVLight",
+  /**
+   * ✓ Auto Mop-Rewashing mode (during a job, distinct from the dock wash cycle).
+   *   -1 = Off
+   *    1 = Works only in CleanGenius-Deep Cleaning mode
+   *    2 = Works in CleanGenius
+   */
+  SmartAutoWash: "SmartAutoWash",
+  /** ? "Smart Auto Mop" — multi-mode (-1 observed = Off). Exact options unknown. */
+  SmartAutoMop: "SmartAutoMop",
+  /** ? Hot wash boolean (separate from `MOP_WASH_TEMP` enum). 1 = on. */
+  HotWash: "HotWash",
+  /** ? Side-brush extension toggle. */
+  SbrushExtrSwitch: "SbrushExtrSwitch",
+  /** ? Mop extension toggle (mop arm extends past chassis). */
+  MopExtrSwitch: "MopExtrSwitch",
+  /** ? Mop fully-scalable toggle (?). */
+  MopFullyScalable: "MopFullyScalable",
+  /** ? Front fill-light master enable. */
+  FillinLight: "FillinLight",
+  /** ? AI stain detection. */
+  StainIdentify: "StainIdentify",
+  /** ? Super-wash mode (intensified). */
+  SuperWash: "SuperWash",
+  /** ? AI human-follow camera mode. */
+  MonitorHumanFollow: "MonitorHumanFollow",
+  /** ? Cleaning route algorithm choice. */
+  CleanRoute: "CleanRoute",
+  /** ? Smart-host AI? */
+  SmartHost: "SmartHost",
+  /** ? Carpet fine-clean toggle. */
+  CarpetFineClean: "CarpetFineClean",
+  /** ? Carpet-only cleaning mode. */
+  CarpetOnlyClean: "CarpetOnlyClean",
+  /** ? Mop effect setting. */
+  MopEffectState: "MopEffectState",
+  /** ? Mop effect on/off. */
+  MopEffectSwitch: "MopEffectSwitch",
+  /** ? Material direction clean (follow grain). */
+  MaterialDirectionClean: "MaterialDirectionClean",
+  /** ? Detergent reminder/notification. */
+  DetergentNote: "DetergentNote",
+  /** ? Meticulous twist (thorough scrubbing). -7 observed default. */
+  MeticulousTwist: "MeticulousTwist",
+  /** ? Hardware revision id of the mop. */
+  MopScalableVersion: "MopScalableVersion",
+  /** ? Mop scalable v2 toggle. */
+  MopScalable2: "MopScalable2",
+  /** ? Smart-charging mode. */
+  SmartCharge: "SmartCharge",
+  /** ? Type of dock back-wash. */
+  BackWashType: "BackWashType",
+  /** ? Mop extension frequency. */
+  ExtrFreq: "ExtrFreq",
+  /** ? Smart drying mode. */
+  SmartDrying: "SmartDrying",
+  /** ? Max-suction toggle. */
+  SuctionMax: "SuctionMax",
+  /** ? "Less collision" — softer obstacle approach. */
+  LessColl: "LessColl",
+  /** ? Cleaning-type selection. */
+  CleanType: "CleanType",
+  /** ? Press into carpet for deep clean. */
+  RobotCarpetPressEnable: "RobotCarpetPressEnable",
+  /** ? "Lacune mop scalable" — meaning unclear. */
+  LacuneMopScalable: "LacuneMopScalable",
+  /** ? Monitor prompt level (notification verbosity?). */
+  MonitorPromptLevel: "MonitorPromptLevel",
+  /** ? Pet-area cleaning. */
+  PetPartClean: "PetPartClean",
+  /** ? Fluctuation confirm result (calibration?). */
+  FluctuationConfirmResult: "FluctuationConfirmResult",
+  /** ? Fluctuation test result (calibration?). */
+  FluctuationTestResult: "FluctuationTestResult",
+} as const;
+
+export type FeatureConfigKey = keyof typeof FEATURE_CONFIG_KEYS;
+
+/**
+ * Parsed shape of `VACUUM_PROP.FEATURE_CONFIG_JSON` after JSON.parse.
+ * Always an array of `{k, v}` entries — order changes between writes.
+ */
+export interface FeatureConfigEntry {
+  k: string;
+  v: number;
 }
