@@ -192,6 +192,80 @@ export const DOCK_PROP = {
 } as const;
 
 /**
+ * Schedules service (siid 8) — recurring cleaning schedules.
+ *
+ * VERIFIED on r2532a 2026-05-02. The schedule lives in a single dash-delimited
+ * string at piid 2; multiple schedules likely live at higher piids (untested).
+ *
+ * **String format** (9 dash-separated fields):
+ *
+ * ```
+ * <id>-<enabled>-<HH:MM>-<weekdays>-<recurring>-<roomScope>-<wetness>-<config>-<rooms>
+ *   1     0/1     22:00   1111111    0/1         0/1          0-32     <int>    <list>
+ * ```
+ *
+ * - `id`         numeric schedule slot id (1 in our tests)
+ * - `enabled`    0 = paused, 1 = active
+ * - `HH:MM`      24h trigger time
+ * - `weekdays`   7-char Mon-Sun bitmap, "1" = run, "0" = skip ("1111111" = daily)
+ * - `recurring`  0 = one-shot (runs next matching day, then auto-disables), 1 = repeating
+ * - `roomScope`  0 = whole map, 1 = specific rooms
+ * - `wetness`    0 in non-Mop modes; 1-32 in Mop modes (16 = Standard default)
+ * - `config`     mode-dependent — see below
+ * - `rooms`      mode-dependent — see below
+ *
+ * **Bimodal config encoding:**
+ *   - **CleanGenius preset** (`config` is small int 128-255):
+ *       low byte = `<bit7 always-on>|<quality bits 4-5: 16=Normal,32=Deep>|<mode bits 0-3: 2=Vac+Mop, 4=MopAfterVac>`
+ *       `rooms` = comma-separated list of segment IDs (e.g. `"7,4,2,3"`) or `"0"` for whole map
+ *   - **Custom mode (global)** (`config` is large packed int):
+ *       see `SCHEDULE_FIELD8` for bit layout (route/mode/suction/cycle-count)
+ *       `rooms` = "0"
+ *   - **Custom mode (per-room)** (`config` = `0`):
+ *       `rooms` = comma-separated list of packed ints, ONE PER ROOM, where each int
+ *       embeds both the segment ID and that room's per-room settings.
+ *       Per-room packed-int layout NOT YET DECODED (see GitHub issue).
+ */
+export const SCHEDULE_PROP = {
+  /**
+   * VERIFIED on r2532a — primary cleaning schedule slot. See block doc for format.
+   * Writes are committed atomically on the app's "Save" tap (no per-keystroke push).
+   */
+  SLOT_1: { siid: 8, piid: 2 } as const,
+  /** VERIFIED — IANA timezone string (e.g. "Europe/London"). */
+  TIMEZONE: { siid: 8, piid: 1 } as const,
+  /**
+   * VERIFIED on r2532a — small base64-zlib blob; appears to be a binary
+   * companion to the schedule string. Decoded contents TBD.
+   */
+  SCHEDULE_BLOB: { siid: 8, piid: 5 } as const,
+  /**
+   * VERIFIED on r2532a — counter that increments by 1 every time a schedule
+   * change is committed via the app's Save button. Useful as a simple "schedule
+   * was modified" signal without diffing the full string.
+   */
+  EDIT_COUNTER: { siid: 4, piid: 64 } as const,
+} as const;
+
+/**
+ * Washboard / dock cleaning service properties (live state during a wash cycle).
+ */
+export const WASHBOARD_PROP = {
+  /**
+   * VERIFIED on r2532a — `1`-Hz countdown of seconds remaining in the current
+   * washboard cleaning cycle. Pushed once per second via `properties_changed`
+   * while the cycle runs. The Dreamehome app's countdown timer is just rendering
+   * this property — it's actual device-side feedback, not a UI estimate.
+   */
+  COUNTDOWN_SECS: { siid: 4, piid: 61 } as const,
+  /**
+   * VERIFIED on r2532a — the cycle's "current step" indicator (jumped 0 → 27
+   * when the cycle started, suggesting an N-of-M progress field).
+   */
+  STEP: { siid: 4, piid: 7 } as const,
+} as const;
+
+/**
  * Auto-Empty service (siid 15) — dust bag / debris evacuation.
  */
 export const AUTO_EMPTY_PROP = {
@@ -460,12 +534,17 @@ export enum ChargingStatus {
   Returning = 5,
 }
 
-/** ASSUMED Tasshack — siid 4 piid 4 enum. NOT YET observed on r2532a. */
+/**
+ * VERIFIED on r2532a 2026-05-02 — actual UI labels confirmed by Martin.
+ * These are the X50 Ultra Complete labels; older Dreames (Tasshack-era)
+ * used the names Strong/Turbo for values 2/3 — same numeric mapping,
+ * just different display strings.
+ */
 export enum SuctionLevel {
   Quiet = 0,
   Standard = 1,
-  Strong = 2,
-  Turbo = 3,
+  Intense = 2,
+  Max = 3,
 }
 
 /** ASSUMED Tasshack — siid 4 piid 5 enum. NOT YET observed on r2532a. */
@@ -521,6 +600,46 @@ export enum AutoEmptyFrequency {
 
 /** Mop-Drying duration in hours — bounded set. */
 export type DryingTimeHours = 2 | 3 | 4;
+
+// ─── Custom-mode schedule field-8 packed integer (VERIFIED on r2532a 2026-05-02) ─
+
+/**
+ * Cleaning route enum — packed into bits 0-3 of the schedule field-8 int.
+ * Only meaningful in Custom-mode schedules. Available routes depend on
+ * the active cleaning mode (e.g. Deep is only valid in Mop-only mode).
+ */
+export enum ScheduleRoute {
+  Standard = 1,
+  Intensive = 2,
+  Deep = 3,
+  Quick = 4,
+}
+
+/**
+ * Cleaning mode enum for Custom-mode schedules — packed into bits 4-6.
+ * Note the value-to-meaning ordering is Dreame's own (not by use frequency).
+ */
+export enum ScheduleCleaningMode {
+  VacOnly = 1,
+  VacAndMop = 2,
+  MopOnly = 3,
+  MopAfterVac = 4,
+}
+
+/**
+ * Bit positions for the Custom-mode schedule's packed-integer field 8.
+ * See `notes/feature-discovery-session.md` and the SCHEDULE_PROP doc for
+ * the full schedule string format.
+ */
+export const SCHEDULE_FIELD8 = {
+  ROUTE_BITS: { offset: 0, width: 4 } as const,    // 1-4 small int — see ScheduleRoute
+  MODE_BITS:  { offset: 4, width: 3 } as const,    // 1-4 small int — see ScheduleCleaningMode
+  // bits 7..23  — undecoded (constant 0xC249 across all observations; suspected
+  //               to encode default/per-room overrides not exercised in our session).
+  SUCTION_BITS:    { offset: 24, width: 2 } as const, // 0-3 — see SuctionLevel
+  // bits 26..27 — unknown
+  CYCLE_COUNT_BITS: { offset: 28, width: 4 } as const, // 1-N int (1-15 max)
+} as const;
 
 // ─── FEATURE_CONFIG_JSON (siid 4 piid 50) keys ────────────────────────
 

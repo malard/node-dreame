@@ -37,6 +37,8 @@ export {
   MopWashWaterLevel,
   MopDryMode,
   AutoEmptyFrequency,
+  ScheduleRoute,
+  ScheduleCleaningMode,
   DEVICE_PROP,
   VACUUM_PROP,
   VACUUM_ACTION,
@@ -48,6 +50,9 @@ export {
   CAMERA_PROP,
   DOCK_PROP,
   AUTO_EMPTY_PROP,
+  SCHEDULE_PROP,
+  WASHBOARD_PROP,
+  SCHEDULE_FIELD8,
   FEATURE_CONFIG_KEYS,
 } from "./miot-spec.js";
 export type {
