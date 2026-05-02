@@ -7,6 +7,15 @@ import type {
 import { DreameAuthError } from "./errors.js";
 import { login, refresh } from "./auth.js";
 import { listDevices } from "./devices.js";
+import {
+  callAction,
+  getProperties,
+  setProperties,
+  type MiotAction,
+  type MiotProp,
+  type PropertyResult,
+  type PropertyWrite,
+} from "./commands.js";
 import { REGION_DEFAULT_COUNTRY, REGION_DEFAULT_LANG, REGION_HOSTS } from "./config.js";
 
 const DEFAULT_REGION: DreameRegion = "eu";
@@ -117,9 +126,45 @@ export class DreameClient {
     return devices;
   }
 
+  /** Read MIoT properties from a device. */
+  async getProperties(did: string, props: MiotProp[]): Promise<PropertyResult[]> {
+    const session = await this.ensureSession();
+    return getProperties(this.#commonInput(did, session), props);
+  }
+
+  /** Write MIoT properties on a device. */
+  async setProperties(did: string, writes: PropertyWrite[]): Promise<PropertyResult[]> {
+    const session = await this.ensureSession();
+    return setProperties(this.#commonInput(did, session), writes);
+  }
+
+  /** Invoke a MIoT action on a device. */
+  async callAction(did: string, action: MiotAction): Promise<unknown> {
+    const session = await this.ensureSession();
+    return callAction(this.#commonInput(did, session), action);
+  }
+
   /** Discard the current session. */
   logout(): void {
     this.#session = null;
+  }
+
+  #commonInput(did: string, session: DreameSession): {
+    session: DreameSession;
+    region: DreameRegion;
+    did: string;
+    country: string;
+    lang: string;
+    apiHost: string;
+  } {
+    return {
+      session,
+      region: this.#region,
+      did,
+      country: this.#country,
+      lang: this.#lang,
+      apiHost: this.#authHost,
+    };
   }
 
   #log(msg: string, meta?: Record<string, unknown>): void {

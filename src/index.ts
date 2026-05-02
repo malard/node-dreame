@@ -6,3 +6,9 @@ export type {
   DreameDevice,
   DreameSession,
 } from "./types.js";
+export type {
+  MiotProp,
+  MiotAction,
+  PropertyWrite,
+  PropertyResult,
+} from "./commands.js";
