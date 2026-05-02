@@ -35,9 +35,12 @@ import {
 const FIXTURE_DIR = path.resolve("test/fixtures/map");
 const FIXTURE_001 = path.join(FIXTURE_DIR, "001-piid1-unknown.bin");
 const FIXTURE_001_META = path.join(FIXTURE_DIR, "001-piid1-unknown.meta.json");
+const FIXTURE_IFRAME_ENV = path.join(FIXTURE_DIR, "oss-ali_dreame_KB968216_660622937_0.envelope.txt");
 const hasFixtures = fs.existsSync(FIXTURE_001);
+const hasIFrame = fs.existsSync(FIXTURE_IFRAME_ENV);
 
 const describeReal = hasFixtures ? describe : describe.skip;
+const describeIFrame = hasIFrame ? describe : describe.skip;
 
 // ─── envelope ────────────────────────────────────────────────────────
 
@@ -308,5 +311,65 @@ describeReal("real fixture: 001-piid1 (r2532a P-frame, map_id=3, frame_id=584)",
 
   it("absent-angle sentinel test: ANGLE_ABSENT = 0x7FFF", () => {
     expect(ANGLE_ABSENT).toBe(0x7fff);
+  });
+});
+
+// ─── real I-frame fixture (fetched from OSS via PATH push) ──────────
+
+describeIFrame("real I-frame fixture (OSS-fetched on r2532a)", () => {
+  const envelope = fs.readFileSync(FIXTURE_IFRAME_ENV, "utf8");
+
+  it("decodes the full I-frame end-to-end", () => {
+    const md = MapDecoder.decode(envelope);
+    expect(md.frameType).toBe("I");
+    expect(md.mapId).toBe(3);
+    expect(md.dimensions).toEqual({
+      left: -9950,
+      top: -650,
+      width: 348,
+      height: 470,
+      gridSize: 50,
+    });
+    expect(md.robot).toEqual({ x: -4099, y: 12870, angle: 175 });
+    expect(md.dock).toEqual({ x: -134, y: 1930, angle: 177 });
+  });
+
+  it("decodes layers (wall + floor + per-segment)", () => {
+    const md = MapDecoder.decode(envelope);
+    const types = md.layers.map((l) => l.type);
+    expect(types).toContain("wall");
+    expect(types).toContain("floor");
+    expect(types.filter((t) => t === "segment").length).toBeGreaterThan(0);
+    // Every layer should have at least one run.
+    for (const l of md.layers) {
+      expect(l.runs.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("collects sensible segments (each with non-zero bbox area)", () => {
+    const md = MapDecoder.decode(envelope);
+    expect(md.segments.length).toBeGreaterThanOrEqual(5);
+    for (const s of md.segments) {
+      const w = s.bbox.xMax - s.bbox.xMin;
+      const h = s.bbox.yMax - s.bbox.yMin;
+      expect(w).toBeGreaterThan(0);
+      expect(h).toBeGreaterThan(0);
+      // Centroid lies inside the bbox.
+      expect(s.centroid.x).toBeGreaterThanOrEqual(s.bbox.xMin);
+      expect(s.centroid.x).toBeLessThanOrEqual(s.bbox.xMax);
+      expect(s.centroid.y).toBeGreaterThanOrEqual(s.bbox.yMin);
+      expect(s.centroid.y).toBeLessThanOrEqual(s.bbox.yMax);
+    }
+  });
+
+  it("decodes obstacles", () => {
+    const md = MapDecoder.decode(envelope);
+    expect(md.obstacles.length).toBeGreaterThan(0);
+    for (const o of md.obstacles) {
+      expect(Number.isFinite(o.x)).toBe(true);
+      expect(Number.isFinite(o.y)).toBe(true);
+      expect(o.confidence).toBeGreaterThanOrEqual(0);
+      expect(o.confidence).toBeLessThanOrEqual(100);
+    }
   });
 });

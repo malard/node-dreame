@@ -59,23 +59,58 @@ correctly; the existing 27 fixtures are all P-frames.
 
 `src/map/decoder.ts` ships the pure decoder per the original Phase 1 plan.
 Public API is `MapDecoder.decode(input, opts?)` returning `MapData`. All
-sub-functions (`unwrapEnvelope`, `parseMapHeader`, `parseMapJsonTail`,
-`classifyPixelFsm1`, `decodePixelGridFsm1`, `parsePathTr`, `parseObstacles`)
-are exported individually for testing.
+sub-functions are exported individually for testing.
 
-**Verified end-to-end against fixture #001** (`r2532a` P-frame): envelope
-unwrap, header parse, JSON-tail parse, and obstacle parse all match
-hand-decoded reference values. Pixel-grid decoder + segment scan are
-unit-tested against synthetic byte arrays — they cannot be validated
-against a real capture until an I-frame lands (P-frame pixel bytes are
-delta values, not absolute classifications, so `MapDecoder.decode`
-deliberately skips the pixel grid when `frameType === "P"`; Phase 2's
-merge step will produce a synthetic I-frame for the merged state and
-that will route through the same pixel decoder).
+**Validated end-to-end against a real I-frame** captured later in the
+same session (348×470 grid covering ~17m × 23m, 10 segments, 32
+obstacles, sensible bboxes/centroids). Plus the original P-frame
+fixture for header/tail/obstacle round-trip.
 
-**Phase 1 exit criteria are met for the parts validatable on a P-frame.**
-The pixel-grid round-trip against an I-frame ground truth is deferred
-until an I-frame fixture exists.
+`src/map/request.ts` ships the active-pull helpers `requestIFrame()`
+and `requestPFrame()` so consumers don't have to wait for the device's
+own emission cycle. No availability gating — assume modern firmware.
+
+## I-frames live in OSS, not the inline channel (verified 2026-05-02)
+
+This was the biggest mid-Phase-1 finding and overturns part of the
+original architecture. The roadmap above implies the I-frame arrives on
+`siid 6 piid 1` (MAP_DATA) like P-frames. **It does not.**
+
+What actually happens on r2532a:
+- The device pushes P-frames continuously on `siid 6 piid 1` (live
+  delta stream).
+- The current I-frame is parked in OSS. Its object name is advertised
+  via `siid 6 piid 3` (PATH push) — typically as the first push on a
+  fresh subscription, format `ali_dreame/<uid>/<did>/<n>`.
+- Calling the `REQUEST_MAP` action with `force_type: 1` causes the
+  device to refresh the OSS-stored I-frame and reset the P-frame chain
+  (frame_id resets toward the new I-frame's frame_id).
+
+To fetch the I-frame: resolve the PATH object to a signed URL via
+`POST /dreame-user-iot/iotfile/getDownloadUrl` (Tasshack
+`protocol.py:651-664`), then GET the URL. The OSS body is the same
+URL-safe base64 envelope as the live channel (NOT raw zlib bytes) and
+unwraps with `MapDecoder`'s existing `unwrapEnvelope`.
+
+Endpoint shape:
+- Path: `/dreame-user-iot/iotfile/getDownloadUrl` (host: same regional
+  api host as auth)
+- Method: POST, JSON body
+- Body: `{"did": <did>, "model": <model>, "filename": <obj_name>, "region": "<country>"}`
+- Response: `{"code": 0, "data": "<signed-url-string>"}` — `data` is
+  the URL string itself, not a nested object.
+
+For permanent / saved-map blobs (different from live I-frames) the
+endpoint is `/dreame-user-iot/iotfile/getOss1dDownloadUrl` with the
+`filename` having its leading character stripped. v1 doesn't use this.
+
+## Variable P-frame dimensions (verified 2026-05-02)
+
+P-frame width/height in the 27-byte header are NOT the global map
+dimensions — they're the bounding box of the changed region for that
+frame. Frames with no spatial change have `width=0, height=0` (header
++ JSON tail only). Phase 2's merge logic must take the union of the
+prev I-frame's dimensions with each P-frame's bbox before merging.
 
 ## Goal
 

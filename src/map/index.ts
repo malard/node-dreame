@@ -22,6 +22,9 @@ export {
 } from "./decoder.js";
 export type { MapHeader, MapTail, RawSegInf, PixelClass } from "./decoder.js";
 
+export { requestIFrame, requestPFrame } from "./request.js";
+export type { RequestIFrameOptions, RequestPFrameOptions } from "./request.js";
+
 export type {
   MapData,
   MapDecodeOptions,

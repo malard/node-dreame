@@ -420,6 +420,27 @@ export const CLOUD_OBJ_PROP = {
    * NOT YET observed on r2532a; capture and disambiguate before relying.
    */
   OLD_MAP_DATA: { siid: 6, piid: 13 } as const,
+  /**
+   * ASSUMED Tasshack `dev` `device.py:1893` — `FRAME_INFO`, the in-param
+   * target for the `REQUEST_MAP` action below. The action's `in` array
+   * carries `[{ piid: 2, value: "<json-string>" }]`; see
+   * `src/map/request.ts:requestIFrame`.
+   */
+  FRAME_INFO: { siid: 6, piid: 2 } as const,
+} as const;
+
+/**
+ * Map-control actions (siid 6).
+ */
+export const MAP_ACTION = {
+  /**
+   * ASSUMED Tasshack `dev` `device.py:1893` — request the device to push
+   * a fresh map frame. The action's `in` array carries a single MIoT
+   * in-param targeting `FRAME_INFO` (piid 2) with a JSON-string value
+   * describing the request shape (frame type, force flag, optional
+   * map_id/frame_id). Use `requestIFrame` from `src/map/request.ts`.
+   */
+  REQUEST_MAP: { siid: 6, aiid: 1 } as const,
 } as const;
 
 /**

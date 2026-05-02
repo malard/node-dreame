@@ -35,6 +35,7 @@ import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { DreameClient } from "../src/index.js";
 import { CLOUD_OBJ_PROP } from "../src/index.js";
+import { requestIFrame } from "../src/map/index.js";
 import { buildHeaders } from "../src/auth.js";
 import { REGION_HOSTS } from "../src/config.js";
 
@@ -66,7 +67,21 @@ console.log(`trigger a clean / pause / resume in the app to force a fresh I-fram
 let seq = 0;
 
 const sub = await dreame.subscribe(device);
-console.log(`subscribed: ${sub.topic}\n`);
+console.log(`subscribed: ${sub.topic}`);
+
+// Pull a fresh I-frame on startup so capture sessions get a deterministic
+// base frame (the device only emits one at session start or map_id change
+// otherwise). Pass `--no-request-i-frame` to skip.
+if (!process.argv.includes("--no-request-i-frame")) {
+  try {
+    await requestIFrame(dreame, device.did, { force: true });
+    console.log(`requested I-frame (force=true) — should arrive momentarily\n`);
+  } catch (err) {
+    console.error(`I-frame request failed:`, (err as Error).message, "\n");
+  }
+} else {
+  console.log("");
+}
 
 sub.on("properties", async (changes) => {
   for (const c of changes) {
