@@ -27,3 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SCHEDULE_FIELD8` constants — bit-position table for the Custom-mode packed integer (route / mode / suction / cycle count).
 - `MiotState.CleanWashboardBase = 30` upgraded from keyDefine-only to direct observation.
 - `SuctionLevel` enum names corrected to match the r2532a UI: Quiet/Standard/**Intense**/**Max** (Tasshack's Strong/Turbo were older-model labels for the same numeric values 2/3).
+- Second session pass — cleaning-behaviour properties verified: `RESUME_CLEANING` (4.11), `CARPET_BOOST` (4.12), `AI_OBSTACLE_BITFIELD` (4.22, partial decode), `CHILD_LOCK` (4.27), `CARPET_SECONDARY_FLAG` (4.33), `CARPET_HANDLING_MODE` (4.36, 5-value enum), `CLEAN_CARPETS_FIRST` (28.2), `SIDE_BRUSH_ROTATING_ON_CARPET` (28.29), `OBSTACLE_CROSSING_MODE` (28.38), `POWER_SAVING_CLEANING` (28.63).
+- Scale Inhibitor consumable added — `SCALE_INHIBITOR_DAYS_LEFT` (31.1), `SCALE_INHIBITOR_LEFT` (31.2). Same shape as SENSOR consumable.
+- `SETTINGS_PROP` corrections: `siid 3 piid 3` was wrongly labelled DND — it's actually `OFF_PEAK_CHARGING_CONFIG_JSON`. The real DND config lives at `siid 5 piid 4` as a JSON-string array of windows.
+- 7 more `FEATURE_CONFIG_KEYS` upgraded `?` → `✓` from live toggles (CarpetFineClean, RobotCarpetPressEnable, FillinLight, SbrushExtrSwitch, MopExtrSwitch, MonitorPromptLevel, PetPartClean) — 11 of ~36 keys now confirmed.
+- New enums: `CarpetHandlingMode`, `ObstacleCrossingMode`, `LiveVideoPrompts`.
+- Documented cross-coupling observations (Pet Recognition → Auto-Empty, Carpet Avoid → RobotCarpetPressEnable=-1) and the cloud-only settings set (auto-update, mopping-with-detergent, camera PIN, device rename, Matter PIN).
+- Matter support discovered — noted in README + project memory as a future-look option for basic vacuum capabilities (separate from the deep cloud catalogue node-dreame provides).

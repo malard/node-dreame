@@ -57,10 +57,52 @@ export const VACUUM_PROP = {
    * piid 46) which is the dock's wash-cycle water amount.
    */
   WATER_VOLUME: { siid: 4, piid: 5 } as const,
+  /** VERIFIED on r2532a 2026-05-02 — boolean for "Resume Cleaning Mode" (auto-resume after dock/charge). */
+  RESUME_CLEANING: { siid: 4, piid: 11 } as const,
+  /** VERIFIED on r2532a 2026-05-02 — Carpet Boost boolean (paired with FEATURE_CONFIG_JSON.RobotCarpetPressEnable). The JSON mirror is 3-state (-1 = blocked when carpet mode = Avoid; 0 = user-disabled; 1 = enabled). */
+  CARPET_BOOST: { siid: 4, piid: 12 } as const,
   /** ASSUMED Tasshack types.py:587 — JSON payload for joystick control. Note: live joystick during the camera/remote-control session appears to bypass this and use a side-channel through the Aliyun video session (no MQTT echoes for joystick movement). */
   REMOTE_CONTROL: { siid: 4, piid: 15 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — packed bitfield for AI / obstacle-detection
+   * sub-options (everything under "Intelligent Obstacle Avoidance" in the app).
+   * Each bit is one toggle. Partial decoding so far:
+   *
+   *   bit 0 (=1)  always set — role TBD
+   *   bit 1 (=2)  Intelligent Obstacle Avoidance (master)
+   *   bit 2 (=4)  Pictures (capture obstacle photos)
+   *   bit 3 (=8)  unobserved (next AI option in menu)
+   *   bit 4 (=16) Pet Recognition (mirrors FEATURE_CONFIG_JSON.PetPartClean)
+   *   bit 8 (=256) always set — role TBD
+   *
+   * See GitHub issue for the full decoding task. NB: enabling Pet Recognition
+   * also auto-bumps `AUTO_EMPTY_PROP.FREQUENCY` from Standard to HighFrequency
+   * (asymmetric coupling — disabling Pet Recognition does NOT revert it).
+   */
+  AI_OBSTACLE_BITFIELD: { siid: 4, piid: 22 } as const,
   /** ASSUMED Tasshack types.py:594 — cleaning mode (sweep/mop/both). VERIFIED returns 5120 on r2532a — clearly a packed bitfield, the simple `CleaningMode` enum below does NOT apply. Decoded form TBD. */
   CLEANING_MODE: { siid: 4, piid: 23 } as const,
+  /** VERIFIED on r2532a 2026-05-02 — Child Lock boolean (locks the on-device buttons). */
+  CHILD_LOCK: { siid: 4, piid: 27 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — secondary carpet-mode flag.
+   * Tracks the `CARPET_HANDLING_MODE` field but doesn't have a 1:1 mapping —
+   * value `3` only seen in Ignore mode; value `1` shared by Crossing/Avoid/Vacuum.
+   * Likely a derived "treat-carpet-as-floor" flag specific to Ignore mode.
+   */
+  CARPET_SECONDARY_FLAG: { siid: 4, piid: 33 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — Carpet Handling Mode enum (5 values).
+   * The app's two-level menu (parent: Crossing/Ignore/Avoid/Vacuum → sub:
+   * Remove/Lift inside Vacuum) flattens into this single multiplexed int.
+   *   1 = Avoid                  (don't drive on carpets)
+   *   2 = Vacuum + Mop Lift      (Vacuum mode, mop physically lifted)
+   *   3 = Vacuum + Remove Mop    (Vacuum mode, dock holds the pads)
+   *   6 = Ignore                 (drive on, treat-as-floor)
+   *   7 = Crossing Carpets       (drive on, full vacuum + mop)
+   * Use the `CarpetHandlingMode` enum.
+   */
+  CARPET_HANDLING_MODE: { siid: 4, piid: 36 } as const,
   /**
    * VERIFIED on r2532a 2026-05-02 — the **Auto Mop-Washing** boolean
    * (auto-rewashes the mop pad mid-job at intervals).
@@ -189,6 +231,28 @@ export const DOCK_PROP = {
    * detecting motion start/stop edges without polling status.
    */
   MOTION_FLAG: { siid: 28, piid: 4 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — "Clean Carpets First" checkbox boolean.
+   * If true, the robot prioritises carpet areas at the start of a cleaning
+   * job (so they get the freshest mop / fullest battery).
+   */
+  CLEAN_CARPETS_FIRST: { siid: 28, piid: 2 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — "Side Brush Rotating on Carpet" checkbox.
+   * Whether the side brush spins when the robot is on carpet (it normally
+   * doesn't to avoid flinging debris).
+   */
+  SIDE_BRUSH_ROTATING_ON_CARPET: { siid: 28, piid: 29 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — Obstacle Crossing Mode (X50-specific).
+   * Refers to how the motorised chassis lift handles thresholds:
+   *   0 = Hurdle-Style (one wheel at a time, like jumping a hurdle)
+   *   1 = Synchronised Dual-Leg (both wheels together)
+   * Use the `ObstacleCrossingMode` enum.
+   */
+  OBSTACLE_CROSSING_MODE: { siid: 28, piid: 38 } as const,
+  /** VERIFIED on r2532a 2026-05-02 — Power-Saving Cleaning boolean. */
+  POWER_SAVING_CLEANING: { siid: 28, piid: 63 } as const,
 } as const;
 
 /**
@@ -363,14 +427,27 @@ export const BATTERY_PROP = {
 
 /** Settings service. */
 export const SETTINGS_PROP = {
-  /** ASSUMED Tasshack types.py — DND master toggle. */
+  /** ASSUMED Tasshack types.py — DND master toggle (boolean). The structured form lives at `DND_CONFIG_JSON`. */
   DND: { siid: 5, piid: 1 } as const,
   /**
-   * VERIFIED on r2532a: returns a JSON-string with full DND config, e.g.
-   * `{"enable":false,"startTime":"22:00","endTime":"08:00"}`. Differs from
-   * the boolean-only `DND` above.
+   * VERIFIED on r2532a 2026-05-02 — DND windows as a JSON-string array.
+   * Each entry: `{id, en: bool, st: "HH:MM", et: "HH:MM", wk: <weekday-bitmap>, ss: 0}`
+   * where `wk` is the same 7-bit Mon-Sun bitmap as the cleaning schedule
+   * (decimal `127` = all days). Multiple windows possible; only one slot
+   * observed on test device.
+   *
+   * (Earlier versions of this file misplaced this constant at siid 3 piid 3
+   * — that location is actually `OFF_PEAK_CHARGING_CONFIG_JSON`, which has
+   * a different shape. Corrected 2026-05-02 by direct observation.)
    */
-  DND_CONFIG_JSON: { siid: 3, piid: 3 } as const,
+  DND_CONFIG_JSON: { siid: 5, piid: 4 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — Off-Peak Charging window as a JSON-string.
+   * Shape: `{enable: bool, startTime: "HH:MM", endTime: "HH:MM"}`.
+   * Lives on the battery service (siid 3) — the dock prefers to charge
+   * during this window for time-of-use electricity tariffs.
+   */
+  OFF_PEAK_CHARGING_CONFIG_JSON: { siid: 3, piid: 3 } as const,
   /** ASSUMED Tasshack types.py:642 — voice volume 0-100. VERIFIED returned 90 on r2532a (plausible). */
   VOLUME: { siid: 7, piid: 1 } as const,
   /** VERIFIED on r2532a: returns "Europe/London" — IANA timezone string. */
@@ -411,6 +488,10 @@ export const CONSUMABLE_PROP = {
   SENSOR_HOURS_LEFT: { siid: 16, piid: 1 } as const,
   /** VERIFIED on r2532a 2026-05-02 — DAYS remaining (NOT %). After in-app reset: jumped from 0 → 30. Triggers a "Clean sensors" notification when either this or piid 1 hits 0. */
   SENSOR_DAYS_LEFT: { siid: 16, piid: 2 } as const,
+  /** VERIFIED on r2532a 2026-05-02 — DAYS remaining for the dock's Scale Inhibitor cartridge (returned 976 in field). */
+  SCALE_INHIBITOR_DAYS_LEFT: { siid: 31, piid: 1 } as const,
+  /** VERIFIED on r2532a 2026-05-02 — % of life remaining for the Scale Inhibitor (returned 89 in field). */
+  SCALE_INHIBITOR_LEFT: { siid: 31, piid: 2 } as const,
 } as const;
 
 // ─── Actions ───────────────────────────────────────────────────────────
@@ -598,6 +679,28 @@ export enum AutoEmptyFrequency {
   LowFrequency = 3,
 }
 
+/** Carpet Handling Mode (`VACUUM_PROP.CARPET_HANDLING_MODE`). Multiplexes the parent menu + the Vacuum-mode sub-options. */
+export enum CarpetHandlingMode {
+  Avoid = 1,
+  VacuumMopLift = 2,
+  VacuumRemoveMop = 3,
+  Ignore = 6,
+  Crossing = 7,
+}
+
+/** Obstacle Crossing Mode (`DOCK_PROP.OBSTACLE_CROSSING_MODE`) — how the X50's motorised chassis lift handles thresholds. */
+export enum ObstacleCrossingMode {
+  HurdleStyle = 0,
+  SynchronisedDualLeg = 1,
+}
+
+/** Live Video Prompts level (`FEATURE_CONFIG_KEYS.MonitorPromptLevel`) — voice prompt volume during camera streaming. */
+export enum LiveVideoPrompts {
+  Weak = 0,
+  Strong = 1,
+  Quiet = 2,
+}
+
 /** Mop-Drying duration in hours — bounded set. */
 export type DryingTimeHours = 2 | 3 | 4;
 
@@ -670,18 +773,35 @@ export const FEATURE_CONFIG_KEYS = {
    *    2 = Works in CleanGenius
    */
   SmartAutoWash: "SmartAutoWash",
+  /** ✓ Intensive Carpet Cleaning — boolean. JSON-only (no dedicated siid:piid). */
+  CarpetFineClean: "CarpetFineClean",
+  /**
+   * ✓ Carpet Boost — 3-state with the `-1` blocked-sentinel pattern.
+   *    1 = enabled
+   *    0 = user-disabled
+   *   -1 = blocked entirely (when CARPET_HANDLING_MODE = Avoid)
+   * Has a paired siid:piid at `VACUUM_PROP.CARPET_BOOST` (siid 4 piid 12).
+   */
+  RobotCarpetPressEnable: "RobotCarpetPressEnable",
+  /** ✓ Master Fill Light enable for the front camera (separate from the manual brightness slider at `CAMERA_PROP.FILL_LIGHT_BRIGHTNESS`). */
+  FillinLight: "FillinLight",
+  /** ✓ AI-driven SideReach (side brush extension/reach). Boolean. */
+  SbrushExtrSwitch: "SbrushExtrSwitch",
+  /** ✓ AI-driven MopExtend (mop arm extension/reach). Boolean. */
+  MopExtrSwitch: "MopExtrSwitch",
+  /**
+   * ✓ Live Video Prompts (3-value enum). See `LiveVideoPrompts`:
+   *   0 = Weak, 1 = Strong, 2 = Quiet.
+   */
+  MonitorPromptLevel: "MonitorPromptLevel",
+  /** ✓ Pet Recognition — mirrors bit 4 of `VACUUM_PROP.AI_OBSTACLE_BITFIELD`. */
+  PetPartClean: "PetPartClean",
   /** ? "Smart Auto Mop" — multi-mode (-1 observed = Off). Exact options unknown. */
   SmartAutoMop: "SmartAutoMop",
   /** ? Hot wash boolean (separate from `MOP_WASH_TEMP` enum). 1 = on. */
   HotWash: "HotWash",
-  /** ? Side-brush extension toggle. */
-  SbrushExtrSwitch: "SbrushExtrSwitch",
-  /** ? Mop extension toggle (mop arm extends past chassis). */
-  MopExtrSwitch: "MopExtrSwitch",
   /** ? Mop fully-scalable toggle (?). */
   MopFullyScalable: "MopFullyScalable",
-  /** ? Front fill-light master enable. */
-  FillinLight: "FillinLight",
   /** ? AI stain detection. */
   StainIdentify: "StainIdentify",
   /** ? Super-wash mode (intensified). */
@@ -692,8 +812,6 @@ export const FEATURE_CONFIG_KEYS = {
   CleanRoute: "CleanRoute",
   /** ? Smart-host AI? */
   SmartHost: "SmartHost",
-  /** ? Carpet fine-clean toggle. */
-  CarpetFineClean: "CarpetFineClean",
   /** ? Carpet-only cleaning mode. */
   CarpetOnlyClean: "CarpetOnlyClean",
   /** ? Mop effect setting. */
@@ -724,14 +842,8 @@ export const FEATURE_CONFIG_KEYS = {
   LessColl: "LessColl",
   /** ? Cleaning-type selection. */
   CleanType: "CleanType",
-  /** ? Press into carpet for deep clean. */
-  RobotCarpetPressEnable: "RobotCarpetPressEnable",
   /** ? "Lacune mop scalable" — meaning unclear. */
   LacuneMopScalable: "LacuneMopScalable",
-  /** ? Monitor prompt level (notification verbosity?). */
-  MonitorPromptLevel: "MonitorPromptLevel",
-  /** ? Pet-area cleaning. */
-  PetPartClean: "PetPartClean",
   /** ? Fluctuation confirm result (calibration?). */
   FluctuationConfirmResult: "FluctuationConfirmResult",
   /** ? Fluctuation test result (calibration?). */

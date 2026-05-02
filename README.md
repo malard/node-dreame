@@ -83,13 +83,16 @@ If a behaviour you care about isn't VERIFIED, treat it as a guess. If you exerci
 
 - Auth + device discovery + MQTT subscription
 - Typed event channels: `properties_changed`, `props` (incl. OTA), `_otc.info`
-- Property reads (state, error, battery, charging, suction, water, cleaning_mode raw, task_status raw, volume, consumables, firmware build, serial, timezone, DND config JSON, feature toggles JSON, version metadata)
+- Property reads (state, error, battery, charging, suction, water, cleaning_mode raw, task_status raw, volume, consumables, firmware build, serial, timezone, off-peak charging window, DND windows, feature toggles JSON, version metadata)
 - Property writes (round-trip verified)
 - Actions: `LOCATE`, `TEST_SOUND`, `CLEAR_WARNING` only
 - Full OTA cycle (download → install → reboot → re-online → version flip)
-- All dock settings reachable from the Dreamehome app's "Base Station" menu
+- All dock settings reachable from the Dreamehome app's "Base Station" menu (mop wash temp/water level/wetness, drying mode, hair compression, smart-mode master, mast control, auto-empty frequency)
+- All cleaning behaviour settings reachable from the app's "Cleaning Settings" menu (carpet handling mode + sub-options, child lock, resume cleaning, power-saving, obstacle crossing mode, AI obstacle bitfield partial)
 - Cleaning-schedule string format (CleanGenius preset + Custom-global; Custom per-room is structural only — see [issue #1](https://github.com/malard/node-dreame/issues/1))
+- Scale Inhibitor consumable (`siid 31`) on top of brush/filter/sensor
 - `DreameDeviceOfflineError` distinguished from other API errors
+- 11 of ~36 `FEATURE_CONFIG_KEYS` confirmed by toggle (the rest documented by name only)
 
 ### Known specifically-NOT-verified pieces
 
@@ -97,11 +100,27 @@ If a behaviour you care about isn't VERIFIED, treat it as a guess. If you exerci
 - `SuctionLevel`, `WaterVolume`, `ChargingStatus`, `CleaningMode` enum behaviour during actual cleaning (settings reads work; downstream effects untested)
 - `TASK_STATUS` (siid 4 piid 1) — raw int only; values 3, 6, 13, 14, 17, 23 observed in different states without a clean mapping
 - `CleaningMode` (siid 4 piid 23) — known to be a packed bitfield on r2532a (raw 5120 in baseline); not decoded
-- Per-room schedule packed-int format
+- Per-room schedule packed-int format ([issue #1](https://github.com/malard/node-dreame/issues/1))
+- AI obstacle bitfield (`siid 4 piid 22`) — partial decoding only; bits 1, 2, 4 verified, bits 0, 3, 5-8 unknown
 - `0xC249` middle bits of the Custom-mode global schedule int
 - The `siid 99 piid 98` and `siid 6 piid 1` compressed blobs (likely telemetry + live map)
 - AI object-detection class catalog (we see bbox class id 160 repeatedly; other class IDs not observed)
-- Most of the `FEATURE_CONFIG_KEYS` (~33 documented by name only)
+- Most of the `FEATURE_CONFIG_KEYS` (~25 still documented by name only)
+- A real cleaning run — none triggered via the lib
+
+### Cloud-only settings (no MQTT push to the device)
+
+Some app settings are **not stored on the device at all** — they live entirely in Dreame's cloud and never produce an MQTT echo. node-dreame can't observe or write these without a separate cloud-API endpoint:
+
+- Auto-update toggle
+- "Mopping with Detergent" master (note: distinct from "Mop-Washing with Detergent" which DOES push)
+- Camera / Activation PIN
+- Device rename (`customName`)
+- Matter pairing / activation code
+
+### Matter support
+
+The X50 Ultra Complete also supports Matter. node-dreame stays cloud-based; Matter would be a cleaner local-only path for basic robot vacuum capabilities (start/dock/battery), but exposes a much smaller surface than what's mapped here. See `project_dreame_matter_future.md` in the project memory for context if pivoting.
 
 ## Reverse-engineering notes
 

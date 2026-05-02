@@ -193,8 +193,9 @@ Each per-room int embeds *both* the segment ID and the per-room settings.
 
 ### Behavioural findings during schedule edits
 
-- `siid 4 piid 64` is an **edit counter** — bumps by 1 every Save tap.
-  Useful to detect "schedule changed" without diffing the full string.
+- `siid 4 piid 64` is an **edit counter** — bumps by 1 every Save tap (and
+  several other account-side commit actions). Useful to detect "something
+  changed" without diffing the full state.
 - `siid 4 piid 7` ("STEP") and `siid 4 piid 61` (countdown seconds) emit
   live during the dock's washboard-cleaning cycle. The countdown ticks at
   1Hz from the device — the app's timer is true device feedback, not a
@@ -206,6 +207,106 @@ Each per-room int embeds *both* the segment ID and the per-room settings.
 - Routes available depend on the active cleaning mode (e.g. Deep route
   only valid in Mop-only mode — switching to Vac+Mop force-resets route
   to Standard).
+
+## Cleaning behaviour & dock settings (added in second session pass)
+
+Same methodology, exhaustive sweep of "Cleaning Settings", "Carpet Cleaning",
+"Edge & Corner", "Real-Time Camera", and the consumables / schedule menus.
+
+### Cleaning-behaviour properties verified
+
+| siid:piid | Constant | Notes |
+|---|---|---|
+| 4.11 | `RESUME_CLEANING` | Auto-resume after dock — bool. |
+| 4.12 | `CARPET_BOOST` | Press into carpet for boost — bool, paired with `RobotCarpetPressEnable` (3-state JSON mirror). |
+| 4.22 | `AI_OBSTACLE_BITFIELD` | Packed bitfield for AI obstacle sub-options. Partial decoding — see [GitHub issue](https://github.com/malard/node-dreame/issues). |
+| 4.27 | `CHILD_LOCK` | Bool. |
+| 4.33 | `CARPET_SECONDARY_FLAG` | Tracks `CARPET_HANDLING_MODE` but not 1:1; value 3 only in Ignore mode. |
+| 4.36 | `CARPET_HANDLING_MODE` | Multiplexed enum — flattens parent menu (Crossing/Ignore/Avoid/Vacuum) + Vacuum sub-options into one int. |
+| 28.2  | `CLEAN_CARPETS_FIRST` | Checkbox. |
+| 28.29 | `SIDE_BRUSH_ROTATING_ON_CARPET` | Checkbox. |
+| 28.38 | `OBSTACLE_CROSSING_MODE` | Hurdle / Synchronised Dual-Leg (X50 chassis-lift mode). |
+| 28.63 | `POWER_SAVING_CLEANING` | Bool. |
+| 31.1 / 31.2 | `SCALE_INHIBITOR_DAYS_LEFT` / `SCALE_INHIBITOR_LEFT` | Dock cartridge — same shape as SENSOR (days + %). |
+
+### Settings-property corrections
+
+- `siid 3 piid 3` was previously labelled `DND_CONFIG_JSON` — that was wrong.
+  It is actually `OFF_PEAK_CHARGING_CONFIG_JSON` with shape
+  `{enable, startTime, endTime}`. Lives on the battery service (siid 3),
+  which makes more sense than DND.
+- The actual DND config is at **`siid 5 piid 4`** as a JSON-string array
+  of windows: `[{id, en, st, et, wk, ss}]`. Same `wk` weekday-bitmap
+  encoding as the cleaning schedule.
+
+### FEATURE_CONFIG_JSON keys upgraded ASSUMED → VERIFIED
+
+Toggled live and confirmed:
+
+- `CarpetFineClean` = Intensive Carpet Cleaning (bool, JSON-only)
+- `RobotCarpetPressEnable` = Carpet Boost (3-state with `-1` blocked-sentinel — paired with `siid 4 piid 12`)
+- `FillinLight` = Master Fill Light enable (separate from `CAMERA_PROP.FILL_LIGHT_BRIGHTNESS` which is the manual brightness slider during streaming)
+- `SbrushExtrSwitch` = AI-driven SideReach (side brush extension)
+- `MopExtrSwitch` = AI-driven MopExtend (mop arm extension)
+- `MonitorPromptLevel` = Live Video Prompts (3-value enum: Weak / Strong / Quiet)
+- `PetPartClean` = Pet Recognition (mirrors bit 4 of `AI_OBSTACLE_BITFIELD`)
+
+### Cross-coupling observed
+
+Some toggles trigger automatic side-effects on other properties:
+
+- **Pet Recognition ON** → also bumps `AUTO_EMPTY_PROP.FREQUENCY` from
+  Standard (1) to HighFrequency (2). **Asymmetric** — disabling Pet
+  Recognition does NOT revert the auto-empty change.
+- **Carpet Mode = Avoid** → flips `RobotCarpetPressEnable` from `1`
+  (or `0`) to `-1` (blocked sentinel) because robot can't press into
+  carpets it never goes on.
+- **Switching cleaning mode in a Custom schedule** can force-reset the
+  route (e.g. Vac+Mop disallows Deep route, so route auto-reverts to
+  Standard).
+
+These auto-couplings are device-side, not app-side — anyone writing
+properties through the lib needs to read the post-write state to see
+what else moved.
+
+### Cloud-only settings (no MQTT push)
+
+Discovered by toggling and observing zero push:
+
+- Auto-update toggle
+- "Mopping with Detergent" master (distinct from "Mop-Washing with Detergent")
+- Camera / Activation PIN
+- Device rename (`customName`)
+- Matter pairing / activation code
+
+These live in Dreame's cloud and never reach the device. node-dreame
+cannot observe or write these without separate cloud-API work.
+
+### Matter discovery
+
+The X50 Ultra Complete supports Matter — the Dreamehome app exposes a
+Matter activation/pairing code under camera/real-time settings. Matter
+is a fundamentally cleaner local-only path for basic vacuum capabilities
+(start/dock/battery, MIoT Robot Vacuum cluster) but exposes far less
+than node-dreame. They're complementary, not competing.
+
+### AI obstacle bitfield (siid 4 piid 22)
+
+Packed-int bitfield. Each AI sub-option in the "Intelligent Obstacle
+Avoidance" menu is one bit. Partial decoding from this session:
+
+```
+bit 0 (=1)   always set       — role TBD
+bit 1 (=2)   verified        — Intelligent Obstacle Avoidance master
+bit 2 (=4)   verified        — Pictures (capture obstacle photos)
+bit 3 (=8)   unobserved      — likely Human / Fluid Recognition
+bit 4 (=16)  verified        — Pet Recognition
+bits 5–7                      unobserved
+bit 8 (=256) always set      — role TBD
+```
+
+Decoding the rest is a rote task — toggle each remaining sub-option
+in the app, observe which bit moves. Filed as a GitHub issue.
 
 ## What's still unverified
 
