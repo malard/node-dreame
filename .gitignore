@@ -7,3 +7,5 @@ dist/
 coverage/
 .vitest-cache/
 .tsbuildinfo
+.research/
+*.apk

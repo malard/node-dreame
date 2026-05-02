@@ -14,12 +14,18 @@ if (!email || !password) {
   process.exit(1);
 }
 
-const dreame = new DreameClient({ email, password, region });
+const dreame = new DreameClient({
+  email,
+  password,
+  region,
+  logger: (msg, meta) => console.log(`[dreame] ${msg}`, meta ?? ""),
+});
 
 await dreame.login();
 const devices = await dreame.getDevices();
 
-console.log(`Found ${devices.length} device(s):`);
+console.log(`\nFound ${devices.length} device(s):`);
 for (const d of devices) {
   console.log(`  ${d.name}  (${d.model})  did=${d.did}  online=${d.online}`);
+  console.log(`    bindDomain: ${d.raw.bindDomain ?? "(none)"}`);
 }
