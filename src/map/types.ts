@@ -15,8 +15,14 @@ export type MapFrameType = "I" | "P" | "W";
 /** Cleaning-path op classes — the four `tr` regex ops collapsed into named runs. */
 export type MapPathType = "mop" | "sweep" | "sweep-and-mop" | "line";
 
-/** Pixel-grid layer kind. Each non-trivial pixel run lands in exactly one layer. */
-export type MapLayerType = "wall" | "floor" | "segment";
+/**
+ * Pixel-grid layer kind. `wall`, `floor`, and `segment` are mutually
+ * exclusive primary classifications — one per pixel. `carpet` is an
+ * independent overlay (low-bits=11 in fsm:1 path B): a carpet pixel
+ * also has a primary classification, and the renderer paints the carpet
+ * texture on top of whatever colour the underlying layer chose.
+ */
+export type MapLayerType = "wall" | "floor" | "segment" | "carpet";
 
 export interface MapPose {
   /** mm, world-frame. */

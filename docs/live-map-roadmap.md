@@ -1,6 +1,7 @@
 # Live Map — Roadmap
 
-> **Status:** Phases 0-1 done; Phase 2 (P-frame merging) ready to start.
+> **Status:** Phases 0-2 done; Phase 3 (Cloud OSS fetch helper / wiring
+> into a manager) is the next deliverable.
 > Source of binary-format truth is
 > [`Tasshack/dreame-vacuum`](https://github.com/Tasshack/dreame-vacuum)
 > on the **`dev` branch** (commit `bba1d35`, v2.0.0b23) — specifically
@@ -69,6 +70,53 @@ fixture for header/tail/obstacle round-trip.
 `src/map/request.ts` ships the active-pull helpers `requestIFrame()`
 and `requestPFrame()` so consumers don't have to wait for the device's
 own emission cycle. No availability gating — assume modern firmware.
+
+## Phase 2 status (2026-05-02)
+
+`src/map/merge.ts` ships `mergePFrame(prevInflated, pFrameInflated)`
+and `mergePFrameEnvelope(prev, pframe, prevOpts?, pframeOpts?)`. A
+sugar wrapper `MapDecoder.applyPFrame(prev, pframe, opts?)` returns
+`{ buffer, data }` so callers can chain merges and get a decoded
+`MapData` in one call.
+
+The merge re-stamps the resulting frame as `frame_type = I` (73) before
+returning. This is a hard contract: the decoder deliberately skips the
+pixel-grid pass on P-frames (the raw bytes are byte-add deltas, not
+absolute classifications), so the merged buffer must look like an
+I-frame for the public `decode()` to round-trip cleanly.
+
+JSON tail merge rules:
+- P-frame tail wins for keys present in both (timestamp_ms, robot,
+  charger, mra, ai_obstacle, sa, etc. — all current state)
+- `tr` (cleaning path) is concatenated `prev.tr + p.tr` — the path is
+  incremental. The `parsePathTr` regex already normalises the lowercase
+  `l` line-continuation op P-frames use, so plain string concatenation
+  is correct.
+- `seg_inf` and `sa` fall back to prev's value when P doesn't carry one
+  (typical — most P-frames don't re-send segment metadata).
+- `origin` is overwritten with the union origin.
+
+`OutOfOrderFrameError` is thrown when `pframe.frameId !== prev.frameId + 1`.
+The Phase 4 manager will use this to queue or trigger a re-request via
+`requestPFrame(client, did, { mapId, frameId })`.
+
+Validated end-to-end against a real fixture chain: I-frame at
+`frame_id=1264` followed by 23 contiguous P-frames (`1265..1287`), 14
+of which were zero-bbox (no spatial change, only robot/obstacle state
+update). Across the chain: dimensions stable at 348×470, segment count
+stable at 10, robot pose tracks each P-frame, cleaning path grows
+monotonically (2665 → 2678 points), no `OutOfOrderFrameError`, and the
+new carpet overlay layer surfaces ~810 runs.
+
+### Carpet pixels are now their own overlay layer
+
+`MapLayerType` is extended to `"wall" | "floor" | "segment" | "carpet"`.
+The carpet flag (path B low-bits=11 in fsm:1 mode) is independent of
+the primary classification — a pixel can be `floor + carpet` or
+`segment 5 + carpet`. The decoder emits a `carpet` layer alongside the
+primary layers, run-length encoded the same way. Renderers that don't
+understand `carpet` ignore it (additive change); ones that do can paint
+a carpet texture on top of whatever colour the primary layer chose.
 
 ## I-frames live in OSS, not the inline channel (verified 2026-05-02)
 
@@ -463,25 +511,28 @@ no network, no MQTT, no state. Phases of work inside this:
 the captured I-frame fixture, byte-equivalent (modulo float rounding) to a
 hand-verified reference.
 
-### Phase 2 — P-frame merging (~2-3 hours)
+### Phase 2 — P-frame merging — DONE (2026-05-02)
 
-- Implement `MapDecoder.applyPFrame(prev: MapData, pFrameBytes): MapData`.
-- Re-use unwrap + header parse from phase 1.
-- Implement the buffer union + byte-add logic from map.py:5018-5070.
-  - Allocate destination as `union(prev.dimensions, new.dimensions)` —
-    take min `(left, top)`, max `(right, bottom)`.
-  - Copy `prev.data` into the new buffer at the offset corresponding to
-    `prev.dimensions.left/top`.
-  - For each pixel in the P-frame's bounding box: `out[idx] = (out[idx] + p[idx]) & 0xFF`.
-  - Re-classify the touched region via the standard pixel decoder.
-- Append `tr` path data (the P-frame's path is incremental).
-- Test with a captured I-frame followed by a P-frame; result should match
-  Tasshack's merged output.
-- Out-of-order handling: if `pFrame.frameId != prev.frameId + 1`, throw
-  `OutOfOrderFrameError` so the manager can queue/request.
+Shipped in `src/map/merge.ts`. See "Phase 2 status" block at the top
+for the full contract. Brief recap of what diverged from this section
+of the original plan:
 
-**Phase 2 exit criteria:** `decode(I) → applyPFrame(P1) → applyPFrame(P2)`
-produces output matching Tasshack's `decode(I).then_apply(P1).then_apply(P2)`.
+- API surface: the merge takes/returns **inflated buffers**, not
+  `MapData`. `MapDecoder.applyPFrame(prev, pframe)` is the sugar that
+  decodes the result, returning `{ buffer, data }`. This keeps the
+  pixel-grid bytes available for the next merge without a re-encode.
+- The merged frame is **re-stamped as `frame_type = I`** so the
+  existing pixel decoder runs on it. The roadmap originally said
+  "re-classify the touched region", but in practice the entire grid
+  has to be re-classified after a byte-add (segment ids on adjacent
+  pixels can shift) and the existing decoder already does that — no
+  reason to duplicate the loop.
+- `tr` path is **concatenated**, not parsed/merged. The `parsePathTr`
+  regex already normalises lowercase `l` continuation ops so the
+  concatenation Just Works.
+- The carpet pixel overlay (low-bits=11 in fsm:1) was a v1 contract
+  gap. Resolved as: extend `MapLayerType` with `"carpet"` and emit a
+  parallel run-length layer. Additive — old renderers ignore it.
 
 ### Phase 3 — Cloud OSS fetch (Dreamehome) (~2-3 hours)
 
