@@ -10,34 +10,9 @@
 import { describe, it, expect } from "vitest";
 import { DreameClient } from "../src/client.js";
 import { requestIFrame, requestPFrame } from "../src/map/index.js";
-import { mockFetch } from "./_helpers.js";
-
-function makeClient(fetchImpl: typeof fetch): DreameClient {
-  const client = new DreameClient({ email: "x@y.z", password: "p", region: "eu" });
-  // Inject a fake session and override the request context to use our mock.
-  // The client doesn't expose a setter, so we cheat via property descriptors —
-  // private fields are name-mangled but writable.
-  // @ts-expect-error — mutating private state for test isolation
-  client["#session"] = {
-    accessToken: "TOKEN",
-    uid: "UID",
-    expiresAt: Date.now() + 60_000,
-    region: "eu",
-  };
-  // @ts-expect-error — same
-  client["#ctx"].fetchImpl = fetchImpl;
-  return client;
-}
 
 describe("requestIFrame", () => {
   it("calls action siid 6 aiid 1 with FRAME_INFO in-param carrying force-push JSON", async () => {
-    const fetchImpl = mockFetch({
-      "POST /device/sendCommand": { json: { code: 0, data: { result: { code: 0 } } } },
-    });
-    // Skip the client wrapper — call action helpers directly with a mocked client.
-    const client = new DreameClient({ email: "x@y.z", password: "p", region: "eu" });
-    // Inject session + fetchImpl by re-creating internals through public-ish surface.
-    // Simpler: call the helper with a fake client object that exposes callAction.
     let captured: unknown = null;
     const fakeClient = {
       callAction: async (did: string, action: unknown) => {
@@ -45,8 +20,6 @@ describe("requestIFrame", () => {
         return { code: 0 };
       },
     } as unknown as DreameClient;
-    void fetchImpl; // silence unused
-    void client;
     await requestIFrame(fakeClient, "DID-1");
     expect(captured).toEqual({
       did: "DID-1",

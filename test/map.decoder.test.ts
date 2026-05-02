@@ -18,6 +18,7 @@
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as zlib from "node:zlib";
 import {
   MapDecoder,
   MapDecodeError,
@@ -50,7 +51,7 @@ describe("unwrapEnvelope", () => {
     // Base64: eJxjZGJmBwAAFAAL  (no URL-safe chars)  → use a constructed
     // payload below to exercise the URL-safe translation.
     const original = Buffer.from([1, 2, 3, 4]);
-    const compressed = require("node:zlib").deflateSync(original);
+    const compressed = zlib.deflateSync(original);
     const standardB64 = compressed.toString("base64");
     const urlSafe = standardB64.replace(/\+/g, "-").replace(/\//g, "_");
     const out = unwrapEnvelope(urlSafe);

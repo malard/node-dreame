@@ -8,6 +8,7 @@ coverage/
 .vitest-cache/
 .tsbuildinfo
 .research/
+.claude/
 *.apk
 
 # Live-map fixtures contain raw OSS object names + per-blob AES keys —

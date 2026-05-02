@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { httpPostJson, RequestContext } from "../src/http.js";
 import {
-  DreameApiError,
   DreameAuthError,
   DreameDeviceOfflineError,
   DreameTransportError,
