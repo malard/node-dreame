@@ -37,13 +37,7 @@ interface RawDevice {
  * Returns one entry per bound device, including shared (non-master) devices.
  */
 export async function listDevices(input: ListDevicesInput): Promise<DreameDevice[]> {
-  const ctx = new RequestContext({
-    region: input.region,
-    ...(input.country !== undefined ? { country: input.country } : {}),
-    ...(input.lang !== undefined ? { lang: input.lang } : {}),
-    ...(input.apiHost !== undefined ? { host: input.apiHost } : {}),
-    ...(input.fetchImpl !== undefined ? { fetchImpl: input.fetchImpl } : {}),
-  });
+  const ctx = RequestContext.from({ ...input, host: input.apiHost });
 
   const parsed = await httpPostJsonBody<DeviceListResponse>({
     ctx,

@@ -71,13 +71,7 @@ interface SendCommandInput {
  * for action calls) — see `SendCommandInput.params`.
  */
 export async function sendCommand(input: SendCommandInput): Promise<SendCommandResponse> {
-  const ctx = new RequestContext({
-    region: input.region,
-    ...(input.country !== undefined ? { country: input.country } : {}),
-    ...(input.lang !== undefined ? { lang: input.lang } : {}),
-    ...(input.apiHost !== undefined ? { host: input.apiHost } : {}),
-    ...(input.fetchImpl !== undefined ? { fetchImpl: input.fetchImpl } : {}),
-  });
+  const ctx = RequestContext.from({ ...input, host: input.apiHost });
   const prefix = input.iotComPrefix ?? IOT_COM_PREFIX_DREAME;
   const id = randomRequestId();
 

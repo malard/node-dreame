@@ -75,13 +75,7 @@ export function buildHeaders(opts: {
 }
 
 function ctxFromInput(input: { region: DreameRegion; country?: string; lang?: string; authHost?: string; fetchImpl?: typeof fetch }): RequestContext {
-  return new RequestContext({
-    region: input.region,
-    ...(input.country !== undefined ? { country: input.country } : {}),
-    ...(input.lang !== undefined ? { lang: input.lang } : {}),
-    ...(input.authHost !== undefined ? { host: input.authHost } : {}),
-    ...(input.fetchImpl !== undefined ? { fetchImpl: input.fetchImpl } : {}),
-  });
+  return RequestContext.from({ ...input, host: input.authHost });
 }
 
 /**

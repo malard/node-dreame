@@ -36,6 +36,23 @@ export interface RequestContextOpts {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * Loose-shape input accepted by `RequestContext.from` — the same `{region,
+ * country?, lang?, host?, fetchImpl?}` keys that several modules pass
+ * around. Shape kept open so callers can pass their own input types
+ * without an explicit conversion. `undefined` is accepted on every
+ * optional field (the constructor coalesces them to per-region defaults)
+ * so callers don't have to strip `undefined` themselves.
+ */
+export interface RequestContextInput {
+  region: DreameRegion;
+  country?: string | undefined;
+  lang?: string | undefined;
+  /** Override the host (defaults from `REGION_HOSTS[region]`). Some callers spell this `authHost` or `apiHost` — pass that here. */
+  host?: string | undefined;
+  fetchImpl?: typeof fetch | undefined;
+}
+
 export class RequestContext {
   readonly region: DreameRegion;
   readonly country: string;
@@ -49,6 +66,23 @@ export class RequestContext {
     this.lang = opts.lang ?? REGION_DEFAULT_LANG[opts.region];
     this.host = opts.host ?? REGION_HOSTS[opts.region];
     this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
+
+  /**
+   * Construct a `RequestContext` from any object carrying the
+   * `RequestContextInput` keys, applying the same conditional-spread
+   * pattern that several modules used to open-code. `undefined`-valued
+   * fields are stripped so they don't override the `RequestContext`
+   * defaults under `exactOptionalPropertyTypes`.
+   */
+  static from(input: RequestContextInput): RequestContext {
+    return new RequestContext({
+      region: input.region,
+      ...(input.country !== undefined ? { country: input.country } : {}),
+      ...(input.lang !== undefined ? { lang: input.lang } : {}),
+      ...(input.host !== undefined ? { host: input.host } : {}),
+      ...(input.fetchImpl !== undefined ? { fetchImpl: input.fetchImpl } : {}),
+    });
   }
 
   /** `https://<host><path>` — pass a path with a leading slash. */

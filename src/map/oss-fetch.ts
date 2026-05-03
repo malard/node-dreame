@@ -91,13 +91,7 @@ export class OssFetcher {
       return `${cached.url}${sep}current=${Math.floor(now / 1000)}`;
     }
 
-    const ctx = new RequestContext({
-      region: input.region,
-      ...(input.country !== undefined ? { country: input.country } : {}),
-      ...(input.lang !== undefined ? { lang: input.lang } : {}),
-      host: input.host,
-      fetchImpl: this.fetchImpl,
-    });
+    const ctx = RequestContext.from({ ...input, fetchImpl: this.fetchImpl });
 
     const resp = await httpPostJson<OssResolveResponse>({
       ctx,
