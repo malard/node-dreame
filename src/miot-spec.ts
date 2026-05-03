@@ -34,16 +34,51 @@ export const DEVICE_PROP = {
 
 /** Vacuum service properties. */
 export const VACUUM_PROP = {
-  /** MIoT vacuum-status enum. VERIFIED on r2532a: transitions through 13 (ChargingComplete), 14 (Updating), 2 (Standby), 6 (Charging) observed. */
+  /**
+   * MIoT vacuum-status enum. See `MiotState`.
+   * VERIFIED 19 distinct values live on r2532a 2026-05-02: 1, 2, 3, 4, 5, 6,
+   * 8, 9, 10, 12, 13, 14, 17, 18, 20, 22, 23, 28, 30. Captured across an
+   * end-to-end cleaning task incl. multiple mid-job dock cycles and a full
+   * end-of-task dry-down. Sub-mode hypothesis confirmed across 6 transitions:
+   * value 1 = vacuum-only, value 12 = vacuum+mop.
+   */
   STATE: { siid: 2, piid: 1 } as const,
-  /** Error/fault code. VERIFIED returns 0 when clear on r2532a. */
+  /**
+   * Error/fault code. See `MiotError` enum for the 6 catalogued values.
+   * VERIFIED on r2532a 2026-05-02: 0/1/18/68/74/114 all observed. Most codes
+   * auto-clear when the underlying cause is resolved (no CLEAR_WARNING needed).
+   * The string-typed mirror at `ERROR_STR_MIRROR` (piid 18) co-fires within ~1ms.
+   */
   ERROR: { siid: 2, piid: 2 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — string-typed mirror of `ERROR` (siid 2 piid 2).
+   * Co-fires within ~1ms of every ERROR transition (e.g. "0" → "74" → "0").
+   * Useful when consuming MIoT properties_changed batches where the int+string
+   * pair lets you correlate the error transition without a separate read.
+   */
+  ERROR_STR_MIRROR: { siid: 4, piid: 18 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — mop-pad availability/transition state.
+   * Observed values: `2` and `0`. Transitions are tightly synchronised with
+   * MiotState 17 (ReturnInstallMop) and 18 (ReturnRemoveMop) edges.
+   *
+   * **Semantics NOT YET fully decoded.** The "available vs in-active-use"
+   * model fits some transitions but contradicts others (e.g. `0 → 2` was
+   * observed at the moment the device prepared to *drop* pads, which the
+   * "available = parked at dock" reading would predict the opposite of).
+   * Treat as raw int and correlate against `CLEANING_MODE` bit 1 — the bit
+   * tracks physical attachment more reliably.
+   */
+  MOP_PADS_STATE: { siid: 2, piid: 6 } as const,
 
-  // Everything below is on siid 4. We've VERIFIED that siid 4 piid 1 reads
-  // (returned 14 then 6 in different cloud sessions) but we DO NOT have a
-  // verified value→meaning mapping for piid 1 on r2532a — only Tasshack's
-  // older-model dict, which uses different numbers. Treat as raw int.
-  /** ASSUMED Tasshack — Dreame "task status" enum. VERIFIED readable on r2532a, value meanings UNVERIFIED. */
+  /**
+   * VERIFIED on r2532a 2026-05-02 — Dreame "task status" enum. See `TaskStatus`.
+   * 6 values catalogued live during an end-to-end cleaning task: 1, 2, 3, 6,
+   * 12, 14. Note: this is a DIFFERENT property from `STATE` (siid 2 piid 1) —
+   * different value space, different semantics. TaskStatus is roughly "what
+   * is the user-visible task doing" (paused/active/transitioning/docked),
+   * MiotState is the lower-level vacuum-mode state machine.
+   */
   TASK_STATUS: { siid: 4, piid: 1 } as const,
   /** ASSUMED Tasshack types.py:573 — current job runtime in minutes. */
   CLEANING_TIME: { siid: 4, piid: 2 } as const,
@@ -51,6 +86,28 @@ export const VACUUM_PROP = {
   CLEANED_AREA: { siid: 4, piid: 3 } as const,
   /** ASSUMED Tasshack types.py:575 — suction level enum (see SuctionLevel). */
   SUCTION_LEVEL: { siid: 4, piid: 4 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — mop-install attempt indicator. Pulses
+   * `0 → 10 → 0` each time the dock attempts to auto-install pads onto
+   * the robot (~13s per attempt). Two consecutive pulses with no value-2
+   * between them means the auto-install failed; the next event is usually
+   * an ERROR=74 to prompt manual install.
+   */
+  MOP_INSTALL_ATTEMPT: { siid: 4, piid: 6 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — multi-purpose **task step indicator**.
+   * Catalogued values (with the contexts they fired in):
+   *   1  = active cleaning step
+   *   6  = post-clean idle (between phases)
+   *   16 = intermediate / unknown step
+   *   25 = mop-install attempt step
+   *   26 = mop-remove step
+   * Useful as a finer "what is the robot trying to do right now" signal
+   * than MiotState alone — distinguishes the sub-step within e.g. a
+   * mop-install sequence. Previously misnamed `WASHBOARD_PROP.STEP`
+   * (it's a general task-step indicator, not washboard-specific).
+   */
+  STEP_INDICATOR: { siid: 4, piid: 7 } as const,
   /**
    * ASSUMED Tasshack types.py:576 — water flow level **during active cleaning**
    * (mop on the floor). NOT to be confused with `MOP_WASH_WATER_LEVEL` (siid 4
@@ -96,7 +153,26 @@ export const VACUUM_PROP = {
    * Recognition does NOT revert it).
    */
   AI_OBSTACLE_BITFIELD: { siid: 4, piid: 22 } as const,
-  /** ASSUMED Tasshack types.py:594 — cleaning mode (sweep/mop/both). VERIFIED returns 5120 on r2532a — clearly a packed bitfield, the simple `CleaningMode` enum below does NOT apply. Decoded form TBD. */
+  /**
+   * VERIFIED on r2532a 2026-05-02 — finer-grained sub-task phase indicator.
+   * See `TaskPhase` enum. 4 values catalogued: 0/1/3/5. Co-varies with
+   * `TASK_STATUS` but moves on a finer cadence (changes during the wash/
+   * refill sub-cycles within a single TaskStatus state).
+   */
+  TASK_PHASE: { siid: 4, piid: 25 } as const,
+  /**
+   * ASSUMED Tasshack types.py:594 — cleaning mode (sweep/mop/both). VERIFIED
+   * on r2532a — packed bitfield, the simple `CleaningMode` enum below does
+   * NOT apply.
+   *
+   * **Decoded so far:**
+   *   bit 1 (=2) = mop pads currently attached to robot. Observed
+   *                `5120 ↔ 5122` transitions tracking install/remove.
+   *
+   * Other bits in `5120` (`0x1400` = bits 10 + 12) are constant across all
+   * observations — likely "always-on" capability flags for this hardware
+   * generation; their meanings remain undecoded.
+   */
   CLEANING_MODE: { siid: 4, piid: 23 } as const,
   /** VERIFIED on r2532a 2026-05-02 — Child Lock boolean (locks the on-device buttons). */
   CHILD_LOCK: { siid: 4, piid: 27 } as const,
@@ -162,6 +238,45 @@ export const VACUUM_PROP = {
    */
   DETERGENT_DOSAGE_STR: { siid: 4, piid: 57 } as const,
   /**
+   * VERIFIED on r2532a 2026-05-02 — mop-install in-progress flag. Pulses
+   * `0 → 1 → 0` in lockstep with `MOP_INSTALL_ATTEMPT` (piid 6). When piid 6
+   * fires `10` this flag is `1`; when piid 6 returns to `0` this flag returns
+   * to `0` too. Use either field as the "auto-install machinery is running"
+   * gate; the pair distinguishes attempt-start (level=1, attempt=10) from
+   * attempt-end (level=0, attempt=0).
+   */
+  MOP_INSTALL_INPROGRESS: { siid: 4, piid: 53 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — mop-rotation phase pulse. Alternates
+   * `9 ↔ 17` every ~3-10s while the mop pads are physically attached and the
+   * robot is actively cleaning. **Silent during vacuum-only cleaning**
+   * (MiotState=1) — confirmed across 3 consecutive vacuum-only windows
+   * with zero pulses, then 30-69 pulses/window once mop pads went back on.
+   * Likely encodes the mop spinner's rotation direction or phase. Useful
+   * as a "are the mop pads currently spinning" signal independent of
+   * MiotState/TASK_STATUS.
+   */
+  MOP_ROTATION_PULSE: { siid: 4, piid: 58 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — task-sequence counter that **resets to 0
+   * at task end**. Increments roughly every ~30-90s during active cleaning
+   * (count of waypoints / decision points / sub-tasks). Useful as a "task
+   * is alive" heartbeat that doesn't depend on MiotState transitions.
+   *
+   * Previously this property was misidentified as a schedule-edit counter
+   * (`SCHEDULE_PROP.EDIT_COUNTER`). The end-of-task `→ 0` reset captured on
+   * 2026-05-02 disproved that and confirmed the per-task scope.
+   */
+  TASK_RESET_COUNTER: { siid: 4, piid: 64 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — firmware-capability bitfield, fired once
+   * per device reconnect. Observed value `31 = 0b11111` (5 capability bits
+   * all set). The exact meaning of each bit is UNDECODED — likely advertises
+   * which feature subsystems this build supports (e.g. live-map, OTA channel,
+   * AI obstacle, etc.).
+   */
+  FIRMWARE_CAPABILITY: { siid: 4, piid: 83 } as const,
+  /**
    * VERIFIED on r2532a: returns a JSON string (yes — string-encoded JSON, not native JSON)
    * containing an array of `{k, v}` objects representing the full feature toggle config:
    * AutoDry, FillinLight, StainIdentify, SuperWash, MopExtrSwitch, RobotCarpetPressEnable,
@@ -198,6 +313,13 @@ export const DIAGNOSTIC_PROP = {
    * models (e.g. human v2.0.2, obstacle_instance v4.5.7) and MR527 platform name.
    */
   AI_MODELS_JSON: { siid: 99, piid: 94 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — slow-growing usage counter. Observed
+   * incrementing by 5 (45 → 50 → 55 → 60) over ~6 hours, irregularly spaced
+   * (9-45 min apart). Plausible as cumulative cleaning quarter-hours or a
+   * similar coarse usage stat. Not time-aligned to any clean schedule.
+   */
+  USAGE_COUNTER: { siid: 99, piid: 22 } as const,
 } as const;
 
 /**
@@ -340,15 +462,20 @@ export const SCHEDULE_PROP = {
    */
   SCHEDULE_BLOB: { siid: 8, piid: 5 } as const,
   /**
-   * VERIFIED on r2532a — counter that increments by 1 every time a schedule
-   * change is committed via the app's Save button. Useful as a simple "schedule
-   * was modified" signal without diffing the full string.
+   * VERIFIED on r2532a 2026-05-02 — pulsed `0 → <int> → 0` (~12s) during a
+   * mid-job dock-side maintenance window. Value `4` observed; likely a
+   * **scheduled-task action trigger** indicator where the int indexes into
+   * a list of schedule-driven actions. Other values not yet seen.
    */
-  EDIT_COUNTER: { siid: 4, piid: 64 } as const,
+  SCHEDULE_ACTION_TRIGGER: { siid: 8, piid: 4 } as const,
 } as const;
 
 /**
  * Washboard / dock cleaning service properties (live state during a wash cycle).
+ *
+ * Note: the previous `STEP` entry (siid 4 piid 7) was moved to
+ * `VACUUM_PROP.STEP_INDICATOR` on 2026-05-02 — it turned out to be a
+ * general-purpose task-step indicator, not washboard-specific.
  */
 export const WASHBOARD_PROP = {
   /**
@@ -358,11 +485,6 @@ export const WASHBOARD_PROP = {
    * this property — it's actual device-side feedback, not a UI estimate.
    */
   COUNTDOWN_SECS: { siid: 4, piid: 61 } as const,
-  /**
-   * VERIFIED on r2532a — the cycle's "current step" indicator (jumped 0 → 27
-   * when the cycle started, suggesting an N-of-M progress field).
-   */
-  STEP: { siid: 4, piid: 7 } as const,
 } as const;
 
 /**
@@ -384,6 +506,14 @@ export const AUTO_EMPTY_PROP = {
    * and the auto-empty service is ready (1 = docked & idle, 0 = away).
    */
   ON_DOCK_FLAG: { siid: 15, piid: 3 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — auto-empty trigger flag. Pulses
+   * `0 → 1 → 0` only when an auto-empty cycle is initiated (does NOT fire
+   * on other dock visits). Useful as a precise "the dock is about to suck
+   * out the dustbin" edge signal — fires immediately on dock arrival,
+   * before the MiotState transition to `22` (AutoEmptying).
+   */
+  TRIGGER_FLAG: { siid: 15, piid: 5 } as const,
 } as const;
 
 /**
@@ -491,6 +621,37 @@ export const CAMERA_PROP = {
    * The model catalog itself lives at `DIAGNOSTIC_PROP.AI_MODELS_JSON`.
    */
   AI_DETECTION_FEED: { siid: 10001, piid: 112 } as const,
+  /**
+   * VERIFIED on r2532a 2026-05-02 — JSON-string carrying a cloud-sync result.
+   * Observed payloads:
+   *   `{operType:"clould",operation:"update",session:"null",result:12546,status:0,df:1|2}`
+   * (Note Dreame's typo: `"clould"` not `"cloud"` — same family of typos as
+   * `"dowloaded"` in the OTA flow.) Fires sporadically; likely a
+   * "settings cloud-sync result" channel.
+   */
+  CLOUD_SYNC_RESULT_JSON: { siid: 10001, piid: 8 } as const,
+} as const;
+
+/**
+ * Notification / status-flag service (siid 14) — robot-side advisory flags
+ * surfaced into the Dreamehome app as "needs attention" prompts.
+ */
+export const NOTIFICATION_PROP = {
+  /**
+   * VERIFIED on r2532a 2026-05-02 — "stuck notification" flag. Despite the
+   * name, this flag is **preemptive / precautionary**, not a confirmed-stuck
+   * signal:
+   *   - Fires `0 → 1` when the device is "concerned about navigation progress"
+   *     (e.g. dock-return takes longer than expected).
+   *   - Clears `1 → 0` automatically once docking succeeds.
+   *   - Genuine stuck cases keep it pinned to `1` until the user intervenes
+   *     (observed sticky for 2 hours in a real stuck event).
+   *
+   * Treat as "robot may need attention" rather than "robot is definitely
+   * stuck" — disambiguate by stickiness (>5 min?) and correlation with
+   * ERROR codes.
+   */
+  STUCK_NOTIFICATION_ACTIVE: { siid: 14, piid: 4 } as const,
 } as const;
 
 /** Battery service. */
@@ -625,14 +786,27 @@ export const VACUUM_ACTION = {
  * present below; some sparse gaps (31-32, 34-96, 100) are not defined by the
  * device file and so absent here.
  *
- * Live observations on r2532a (2026-05-02 OTA cycle):
- *   13 → 14 (start of OTA install)  → "Updating"
- *   14 → 2  (post-reboot, briefly)  → "Standby"
- *   2  → 13 (settled back on dock)  → "ChargingComplete"
- *   13 → 6  (subsequent re-charge from charge port)  → "Charging"
+ * **19 values verified live on r2532a 2026-05-02** across a full ~2.5h
+ * cleaning task (incl. multiple mid-job dock cycles, mop install/remove,
+ * auto-empty, end-of-task drying):
  *
- * **Do NOT use this enum for siid 4 piid 1** (`TASK_STATUS`) — different
- * property, different value space, no verified mapping yet.
+ *   1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 13, 14, 17, 18, 20, 22, 23, 28, 30
+ *
+ * Sub-mode discovery: **MiotState 1 vs 12 distinguishes vacuum-only
+ * vs vacuum+mop cleaning** — the robot dynamically alternates per zone
+ * (install pads → 12 → remove pads → 1) without ending the user-visible
+ * task. Confirmed across 6 independent transitions.
+ *
+ * Canonical end-of-cleaning sequence:
+ *   `12 → 5 → 6 → 22 → 9 → 6 → 8`
+ *   Cleaning → ReturningToCharge → Charging → AutoEmptying → MopCleaning
+ *   → Charging → MopDrying (settled idle).
+ *
+ * "Return-with-intent" triplet (all verified 2026-05-02):
+ *   17 = ReturnInstallMop, 18 = ReturnRemoveMop, 28 = ReturnToEmpty.
+ *
+ * **Do NOT use this enum for siid 4 piid 1** (`TASK_STATUS`) — that's a
+ * separate property with its own value space; see `TaskStatus` enum.
  */
 export enum MiotState {
   Cleaning = 1,
@@ -689,6 +863,89 @@ export enum ChargingStatus {
   Charging = 1,
   Discharging = 2,
   Returning = 5,
+}
+
+/**
+ * VERIFIED enum for **siid 2 piid 2 (ERROR / fault code)** on r2532a.
+ *
+ * 6 values catalogued live on 2026-05-02 (full cleaning task + a deliberate
+ * wheel-spin user perturbation):
+ *
+ * - `0` — clear / no error
+ * - `1` — wheel rotation anomaly (encoder reports motion that doesn't match
+ *         commanded motor state — slip, forced rotation, debris, gear stuck).
+ *         Auto-clears in ~12s once the cause resolves.
+ * - `18` — robot lifted / wheels off ground. **Sticky** until physical resolution.
+ * - `68` — task-complete notification. Fires together with the final
+ *          MopDrying transition at end-of-task; not a fault. Sticky during
+ *          the drying period.
+ * - `74` — manual mop install required. Fires after auto-install attempts
+ *          fail; auto-clears once the user manually installs the pads.
+ * - `114` — washboard filter needs cleaning (maintenance reminder).
+ *
+ * Most codes auto-clear when the underlying condition resolves — the
+ * `CLEAR_WARNING` action is rarely needed. The string mirror at
+ * `VACUUM_PROP.ERROR_STR_MIRROR` (siid 4 piid 18) co-fires within ~1ms.
+ *
+ * Other Tasshack-documented error codes (e.g. low battery, dustbin full,
+ * water tank empty) likely use different ints on r2532a — treat any
+ * non-listed value as raw and capture for cataloguing.
+ */
+export enum MiotError {
+  Clear = 0,
+  WheelRotationAnomaly = 1,
+  RobotLifted = 18,
+  TaskComplete = 68,
+  ManualMopInstallRequired = 74,
+  WashboardFilterNeedsCleaning = 114,
+}
+
+/**
+ * VERIFIED enum for **siid 4 piid 1 (TASK_STATUS)** on r2532a.
+ *
+ * 6 values catalogued live during a full cleaning task on 2026-05-02:
+ *
+ * - `1` — interrupted / paused (lift, user-pause, transient stall — the
+ *         common pause fallback)
+ * - `2` — active task running
+ * - `3` — transitioning (returning to wash / dock)
+ * - `6` — on dock idle (post-wash, between phases)
+ * - `12` — transient pause-edge (fires briefly during MiotState 12 → paused
+ *          transitions)
+ * - `14` — needs intervention (long-stall / sticky error)
+ *
+ * Distinct from `MiotState` (siid 2 piid 1) — `TaskStatus` is roughly
+ * "what is the user-visible task doing" while `MiotState` is the lower-level
+ * vacuum mode machine. They co-vary but don't have a 1:1 mapping.
+ */
+export enum TaskStatus {
+  InterruptedOrPaused = 1,
+  Active = 2,
+  Transitioning = 3,
+  OnDockIdle = 6,
+  TransientPauseEdge = 12,
+  NeedsIntervention = 14,
+}
+
+/**
+ * VERIFIED enum for **siid 4 piid 25 (TASK_PHASE)** on r2532a.
+ *
+ * 4 values catalogued during a full cleaning task on 2026-05-02:
+ *
+ * - `0` — idle / no active sub-task
+ * - `1` — active sub-task running (during BOTH cleaning AND wash contexts —
+ *         a general "doing the active phase of whatever task we're in" signal)
+ * - `3` — transit to wash / dock
+ * - `5` — washing in progress
+ *
+ * Use as a finer-grained progression signal than `TaskStatus`. Values
+ * 2 and 4 not yet observed.
+ */
+export enum TaskPhase {
+  Idle = 0,
+  Active = 1,
+  TransitToWash = 3,
+  Washing = 5,
 }
 
 /**
