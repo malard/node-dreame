@@ -13,6 +13,7 @@ import {
   MapManager,
   OssFetcher,
   clientFrameRequester,
+  type MapData,
   type MapSaved,
   type MapSavedList,
   type OssInputBase,
@@ -637,6 +638,46 @@ export class Vacuum extends EventEmitter {
       cleaningCount: lookup(12, 3),
       totalCleanedAreaSqm: lookup(12, 4),
     };
+  }
+
+  // ─── per-task historical maps ──────────────────────────────────────
+
+  /**
+   * Fetch and decode a per-task cleaned-area map from OSS, given the
+   * `logFileName` from a `CleaningHistoryRecord` (typically obtained
+   * via the `'taskComplete'` event).
+   *
+   * The returned `MapData` carries the *full* cleaning path the robot
+   * took during that task in `paths`, the same room layout in
+   * `layers`/`segments`, the dock + final robot pose, and the
+   * `cleanedArea` overlay (cleaned vs dirty pixels). Suitable as the
+   * single input to render a "this is what was cleaned in task X"
+   * historical view.
+   *
+   * VERIFIED on r2532a 2026-05-03 — uses the same `getDownloadUrl`
+   * endpoint as live blobs (no separate "permanent" endpoint needed).
+   */
+  async fetchTaskMap(logFileName: string): Promise<MapData> {
+    if (!this.#ossFetcher) {
+      this.#ossFetcher = new OssFetcher();
+    }
+    const session = this.#client.session;
+    if (!session) {
+      throw new DreameTransportError(
+        "fetchTaskMap: no active session — call .login() first",
+      );
+    }
+    const bytes = await this.#ossFetcher.fetchBlob({
+      host: this.#client.apiHost,
+      accessToken: session.accessToken,
+      region: this.#client.region,
+      country: this.#client.country,
+      lang: this.#client.lang,
+      did: this.device.did,
+      model: this.device.model,
+      filename: logFileName,
+    });
+    return MapDecoder.decode(bytes.toString("utf8"));
   }
 
   // ─── saved maps ────────────────────────────────────────────────────
