@@ -182,6 +182,23 @@ that don't ship the fixtures get an unrelated `ENOENT` failure.
 This bit us once. The repo's vitest config already runs the project
 test suite green; the rule is here to keep it that way.
 
+## One concept per file
+
+Each module should hold one cohesive concept. Soft size guideline: if a
+file is over ~500 lines and contains two clearly separable concerns,
+split it. The repo's existing splits (after #15 and #16):
+
+- `src/vacuum.ts` (the class) is paired with `src/vacuum/state.ts`,
+  `src/vacuum/task-complete.ts`, and `src/vacuum/saved-maps.ts`.
+- `src/miot-spec.ts` (the spec catalogue) is paired with
+  `src/spec/enums.ts` and `src/spec/feature-config.ts`.
+- `src/headers.ts` is split out from `src/auth.ts` to break the
+  `auth → http → auth` import cycle.
+
+Re-exports from the original module are fine when they preserve the
+existing public import surface. Don't move public symbols without a
+re-export bridge unless you're explicitly making a breaking change.
+
 ## HTTP header keys are always lowercase
 
 Every header key emitted from the library is lower-case
