@@ -157,6 +157,12 @@ export class DreameSubscription extends EventEmitter {
       protocolVersion: 4,
       reconnectPeriod: 5000,
       connectTimeout: 15000,
+      // Dreame's per-device broker (`bindDomain`) presents a cert that doesn't
+      // chain to a public CA — the Dreamehome app skips verification too. We
+      // accept the connection without verification and rely on the access
+      // token (passed as the MQTT password) for authentication. Pinning the
+      // expected leaf cert here would be safer; we don't have a stable
+      // fingerprint across regions/devices yet to do so.
       rejectUnauthorized: false,
       clean: true,
     });
