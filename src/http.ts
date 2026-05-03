@@ -11,7 +11,7 @@ import {
   REGION_DEFAULT_LANG,
   REGION_HOSTS,
 } from "./config.js";
-import { buildHeaders } from "./auth.js";
+import { buildHeaders } from "./headers.js";
 
 /** Cloud response code that means "device didn't ACK; may be offline". */
 const CODE_DEVICE_OFFLINE = 80001;

@@ -1,14 +1,11 @@
 import type { DreameRegion, DreameSession } from "./types.js";
 import { DreameAuthError } from "./errors.js";
-import {
-  APP_META,
-  APP_USER_AGENT,
-  CONTENT_TYPE_FORM,
-  OAUTH_BASIC_AUTH,
-  TENANT_DREAME,
-} from "./config.js";
-import { buildRlcHeader, hashPassword } from "./crypto.js";
+import { hashPassword } from "./crypto.js";
 import { httpPostJson, RequestContext, type BaseResponse } from "./http.js";
+import { buildHeaders } from "./headers.js";
+
+// Re-export for callers (and tests) that import buildHeaders from here.
+export { buildHeaders };
 
 export interface LoginInput {
   email: string;
@@ -48,30 +45,6 @@ interface OAuthTokenResponse extends BaseResponse {
   error_description?: string;
   // Loose — Dreame can add fields without breaking us.
   [key: string]: unknown;
-}
-
-/**
- * Compose the static request headers the Dreame backend expects on every call.
- * Pass `accessToken` after login; omit (or pass `null`) for the unauthenticated
- * login request itself.
- */
-export function buildHeaders(opts: {
-  region: DreameRegion;
-  country: string;
-  lang: string;
-  accessToken?: string | null;
-  contentType?: string;
-}): Record<string, string> {
-  const auth = opts.accessToken ? `bearer ${opts.accessToken}` : "bearer";
-  return {
-    "user-agent": APP_USER_AGENT,
-    authorization: OAUTH_BASIC_AUTH,
-    "content-type": opts.contentType ?? CONTENT_TYPE_FORM,
-    "dreame-auth": auth,
-    "dreame-meta": APP_META,
-    "dreame-rlc": buildRlcHeader(opts.region, opts.lang, opts.country),
-    "tenant-id": TENANT_DREAME,
-  };
 }
 
 function ctxFromInput(input: { region: DreameRegion; country?: string; lang?: string; authHost?: string; fetchImpl?: typeof fetch }): RequestContext {
