@@ -10,6 +10,8 @@ export type {
   DreameRegion,
   DreameDevice,
   DreameSession,
+  DreameLogger,
+  DreameLogLevel,
 } from "./types.js";
 export type {
   MiotProp,

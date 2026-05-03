@@ -39,6 +39,7 @@
 
 import { EventEmitter } from "node:events";
 import type { PropertyChange } from "../mqtt.js";
+import type { DreameLogger } from "../types.js";
 import { CLOUD_OBJ_PROP } from "../miot-spec.js";
 import {
   MapDecodeError,
@@ -97,8 +98,8 @@ export interface MapManagerOpts {
   recoverGap?: number;
   /** Pending-queue size after which we abandon the chain and request a fresh I-frame. Default 8. */
   pendingMax?: number;
-  /** Optional structured logger. */
-  logger?: (msg: string, meta?: Record<string, unknown>) => void;
+  /** Optional structured logger — see `DreameLogger`. */
+  logger?: DreameLogger;
 }
 
 /**
@@ -120,7 +121,7 @@ export class MapManager extends EventEmitter {
   readonly #frameRequester: FrameRequester;
   readonly #recoverGap: number;
   readonly #pendingMax: number;
-  readonly #logger?: (msg: string, meta?: Record<string, unknown>) => void;
+  readonly #logger?: DreameLogger;
   readonly #onProperties: (changes: PropertyChange[]) => void;
 
   #currentBuffer: Buffer | null = null;
@@ -344,7 +345,7 @@ export class MapManager extends EventEmitter {
       this.#current.mapId === decoded.mapId &&
       this.#current.frameId > decoded.frameId
     ) {
-      this.#log("dropping stale I-frame", {
+      this.#log("debug", "dropping stale I-frame", {
         currentFrameId: this.#current.frameId,
         incoming: decoded.frameId,
       });
@@ -358,12 +359,12 @@ export class MapManager extends EventEmitter {
 
   #applyPFrame(inflated: Buffer, mapId: number, frameId: number): void {
     if (!this.#currentBuffer || !this.#current) {
-      this.#log("P-frame before any I-frame, requesting baseline");
+      this.#log("info", "P-frame before any I-frame, requesting baseline");
       this.#triggerIFrameRequest();
       return;
     }
     if (mapId !== this.#current.mapId) {
-      this.#log("P-frame map_id mismatch — discarding state", {
+      this.#log("warn", "P-frame map_id mismatch — discarding state", {
         currentMapId: this.#current.mapId,
         incomingMapId: mapId,
       });
@@ -428,7 +429,7 @@ export class MapManager extends EventEmitter {
 
   #considerRecovery(): void {
     if (this.#pending.size > this.#pendingMax) {
-      this.#log("pending queue exceeded pendingMax — requesting fresh I-frame", {
+      this.#log("warn", "pending queue exceeded pendingMax — requesting fresh I-frame", {
         pendingSize: this.#pending.size,
       });
       this.#pending.clear();
@@ -437,7 +438,7 @@ export class MapManager extends EventEmitter {
     }
     if (this.#pending.size > this.#recoverGap && this.#current) {
       const missing = this.#current.frameId + 1;
-      this.#log("pending queue exceeded recoverGap — requesting missing P-frame", {
+      this.#log("info", "pending queue exceeded recoverGap — requesting missing P-frame", {
         pendingSize: this.#pending.size,
         missingFrameId: missing,
         mapId: this.#current.mapId,
@@ -463,7 +464,11 @@ export class MapManager extends EventEmitter {
     this.emit("error", e);
   }
 
-  #log(msg: string, meta?: Record<string, unknown>): void {
-    this.#logger?.(`map: ${msg}`, meta);
+  #log(
+    level: "debug" | "info" | "warn" | "error",
+    msg: string,
+    meta?: Record<string, unknown>,
+  ): void {
+    this.#logger?.(level, `map: ${msg}`, meta);
   }
 }

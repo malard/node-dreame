@@ -1,5 +1,6 @@
 import type {
   DreameClientOptions,
+  DreameLogLevel,
   DreameSession,
   DreameDevice,
   DreameRegion,
@@ -79,7 +80,7 @@ export class DreameClient {
    * `ensureSession()` will refresh transparently).
    */
   async login(): Promise<DreameSession> {
-    this.#log("login: requesting token");
+    this.#log("info", "login: requesting token");
     this.#session = await login({
       email: this.#opts.email,
       password: this.#opts.password,
@@ -88,7 +89,7 @@ export class DreameClient {
       lang: this.#ctx.lang,
       authHost: this.#ctx.host,
     });
-    this.#log("login: got session", {
+    this.#log("info", "login: got session", {
       uid: this.#session.uid,
       expiresAt: this.#session.expiresAt,
     });
@@ -105,7 +106,7 @@ export class DreameClient {
     }
     if (Date.now() >= this.#session.expiresAt - REFRESH_LEEWAY_SECS * 1000) {
       if (this.#session.refreshToken) {
-        this.#log("session: refreshing");
+        this.#log("info", "session: refreshing");
         try {
           this.#session = await refresh({
             refreshToken: this.#session.refreshToken,
@@ -116,7 +117,7 @@ export class DreameClient {
           });
           return this.#session;
         } catch (err) {
-          this.#log("session: refresh failed, falling back to full login", {
+          this.#log("warn", "session: refresh failed, falling back to full login", {
             error: String(err),
           });
         }
@@ -129,7 +130,7 @@ export class DreameClient {
   /** List devices on the account. Auto-logs-in if needed. */
   async getDevices(opts: CallOptions = {}): Promise<DreameDevice[]> {
     const session = await this.ensureSession();
-    this.#log("getDevices: requesting list");
+    this.#log("debug", "getDevices: requesting list");
     const devices = await listDevices({
       session,
       region: this.#ctx.region,
@@ -137,7 +138,7 @@ export class DreameClient {
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
-    this.#log("getDevices: got list", { count: devices.length });
+    this.#log("debug", "getDevices: got list", { count: devices.length });
     return devices;
   }
 
@@ -189,7 +190,7 @@ export class DreameClient {
     };
   }
 
-  #log(msg: string, meta?: Record<string, unknown>): void {
-    this.#opts.logger?.(msg, meta);
+  #log(level: DreameLogLevel, msg: string, meta?: Record<string, unknown>): void {
+    this.#opts.logger?.(level, msg, meta);
   }
 }

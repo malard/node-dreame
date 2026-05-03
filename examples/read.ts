@@ -4,7 +4,7 @@ const dreame = new DreameClient({
   email: process.env.DREAME_EMAIL!,
   password: process.env.DREAME_PASSWORD!,
   region: "eu",
-  logger: (m, x) => console.log("[d]", m, x ?? ""),
+  logger: (level, m, x) => console.log(`[d:${level}]`, m, x ?? ""),
 });
 
 const devices = await dreame.getDevices();

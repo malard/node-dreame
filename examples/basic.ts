@@ -18,7 +18,7 @@ const dreame = new DreameClient({
   email,
   password,
   region,
-  logger: (msg, meta) => console.log(`[dreame] ${msg}`, meta ?? ""),
+  logger: (level, msg, meta) => console.log(`[dreame:${level}] ${msg}`, meta ?? ""),
 });
 
 await dreame.login();
