@@ -23,6 +23,7 @@ export type {
   PropsPush,
   InfoPush,
   OtaEvent,
+  EventOccuredPush,
   RawMqttEvent,
 } from "./mqtt.js";
 export { Vacuum } from "./vacuum.js";

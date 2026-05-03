@@ -113,23 +113,33 @@ export const VACUUM_PROP = {
    */
   STEP_INDICATOR: { siid: 4, piid: 7 } as const,
   /**
-   * ASSUMED Tasshack `types.py:579` — unix-epoch (seconds) timestamp
-   * for the start of the *current* cleaning task. Empty when idle.
-   * Populated during/after a task; not yet observed live on r2532a.
+   * ASSUMED Tasshack `types.py:579` — supposed unix-epoch start time
+   * for the *current* cleaning task.
+   *
+   * **NOT PRESENT on r2532a** — verified 2026-05-03 by reading siid 4
+   * piid 8 *during an active cleaning task*: response code = -1
+   * (property does not exist). Modern Dreame must surface per-task
+   * timing differently (likely via a cloud REST endpoint we haven't
+   * mapped). Kept here purely for cross-reference with Tasshack's
+   * older-Dreame mapping. Do not rely on this for r2532a.
    */
   CLEANING_START_TIME: { siid: 4, piid: 8 } as const,
   /**
-   * ASSUMED Tasshack `types.py:580` — log filename for the current /
-   * most-recent task (used by Mi-cloud's history view to fetch the
-   * per-task cleaned-area map). Empty when idle. Not yet observed live
-   * on r2532a; the equivalent fetch endpoint on Dreame native is
-   * unknown.
+   * ASSUMED Tasshack `types.py:580` — log filename for the most-recent
+   * task.
+   *
+   * **NOT PRESENT on r2532a** — verified 2026-05-03 by reading siid 4
+   * piid 9 mid-task: code = -1. The Mi-cloud history fetch flow this
+   * field belongs to doesn't apply to Dreame native. Same caveat as
+   * `CLEANING_START_TIME` above.
    */
   CLEAN_LOG_FILE_NAME: { siid: 4, piid: 9 } as const,
   /**
    * ASSUMED Tasshack `types.py:585` — completion bool for the most-
-   * recent task (`true` if it ended cleanly, `false` if cancelled or
-   * errored). Empty when idle. Not yet observed live on r2532a.
+   * recent task.
+   *
+   * **NOT PRESENT on r2532a** — verified 2026-05-03, code = -1. Same
+   * caveat as `CLEANING_START_TIME` above.
    */
   CLEAN_LOG_STATUS: { siid: 4, piid: 13 } as const,
   /**

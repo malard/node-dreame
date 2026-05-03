@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { brokerUrl, buildStatusTopic, parseInfoPush } from "../src/mqtt.js";
+import { brokerUrl, buildStatusTopic, parseEventOccured, parseInfoPush } from "../src/mqtt.js";
 import type { DreameDevice } from "../src/types.js";
 
 function makeDevice(overrides: Partial<DreameDevice> = {}): DreameDevice {
@@ -70,5 +70,51 @@ describe("parseInfoPush", () => {
     const params = { hw_ver: "Linux", future_field: 42 };
     const out = parseInfoPush("did-123", params);
     expect(out.raw).toBe(params);
+  });
+});
+
+describe("parseEventOccured", () => {
+  it("parses a typical event_occured push", () => {
+    const out = parseEventOccured("fallback-did", {
+      did: "660622937",
+      siid: 4,
+      eiid: 4,
+      arguments: [],
+    });
+    expect(out).toEqual({
+      did: "660622937",
+      siid: 4,
+      eiid: 4,
+      arguments: [],
+    });
+  });
+
+  it("falls back to the supplied did when params.did is absent", () => {
+    const out = parseEventOccured("fallback-did", {
+      siid: 2,
+      eiid: 2,
+      arguments: [],
+    });
+    expect(out?.did).toBe("fallback-did");
+  });
+
+  it("coerces a numeric did from params to a string", () => {
+    const out = parseEventOccured("fallback-did", {
+      did: 660622937,
+      siid: 4,
+      eiid: 4,
+    });
+    expect(out?.did).toBe("660622937");
+  });
+
+  it("treats missing arguments as an empty array", () => {
+    const out = parseEventOccured("did", { siid: 1, eiid: 1 });
+    expect(out?.arguments).toEqual([]);
+  });
+
+  it("returns null when siid or eiid is missing or non-numeric", () => {
+    expect(parseEventOccured("did", { eiid: 1 })).toBeNull();
+    expect(parseEventOccured("did", { siid: 1 })).toBeNull();
+    expect(parseEventOccured("did", { siid: "1", eiid: 1 })).toBeNull();
   });
 });

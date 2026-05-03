@@ -54,6 +54,27 @@ export interface OtaEvent {
   progress: number | null;
 }
 
+/**
+ * MIoT event push (`method: "event_occured"`, with the typo) — the
+ * MIoT-defined event-bus channel for things that aren't property
+ * changes. Emitted alongside `properties` pushes during real device
+ * activity (verified live on r2532a 2026-05-03 — `siid 4 eiid 4` and
+ * `siid 2 eiid 2` both observed during a cleaning task).
+ *
+ * The MIoT spec defines event names per `siid`/`eiid` pair, but
+ * Dreame doesn't publish a public catalogue. `arguments` is forwarded
+ * as-is — usually an empty array for status-changed events.
+ */
+export interface EventOccuredPush {
+  did: string;
+  /** MIoT service id. */
+  siid: number;
+  /** MIoT event id. */
+  eiid: number;
+  /** Event arguments — shape varies per (siid, eiid). Usually empty. */
+  arguments: unknown[];
+}
+
 /** Raw MQTT envelope as received from the broker, before flattening. */
 export interface RawMqttEvent {
   id?: number;
@@ -75,15 +96,17 @@ interface SubscriptionInput {
 
 /**
  * Live MQTT subscription to a single device. Emits:
- *   `properties` (PropertyChange[]) — one event per `properties_changed` push
- *   `props`      (PropsPush)         — one event per `props` push (k/v map)
- *   `info`       (InfoPush)          — one event per `_otc.info` push (typed)
- *   `ota`        (OtaEvent)          — convenience: extracted from `props` when
- *                                       params contains ota_state or ota_progress
- *   `message`    (RawMqttEvent)     — the raw envelope, for low-level inspection
- *   `connect`    ()                  — when the underlying broker connects
- *   `close`      ()                  — when the connection drops
- *   `error`      (Error)             — transport / parse errors
+ *   `properties`     (PropertyChange[]) — one event per `properties_changed` push
+ *   `event`          (EventOccuredPush)  — one event per MIoT event-bus push
+ *                                          (`method: "event_occured"` — yes, typo)
+ *   `props`          (PropsPush)         — one event per `props` push (k/v map)
+ *   `info`           (InfoPush)          — one event per `_otc.info` push (typed)
+ *   `ota`            (OtaEvent)          — convenience: extracted from `props` when
+ *                                          params contains ota_state or ota_progress
+ *   `message`        (RawMqttEvent)      — the raw envelope, for low-level inspection
+ *   `connect`        ()                  — when the underlying broker connects
+ *   `close`          ()                  — when the connection drops
+ *   `error`          (Error)             — transport / parse errors
  *
  * Call `.close()` to tear down. Closed subscriptions cannot be reopened —
  * call `client.subscribe(did)` again to make a new one.
@@ -213,6 +236,14 @@ export class DreameSubscription extends EventEmitter {
       return;
     }
 
+    if (method === "event_occured" && params && typeof params === "object" && !Array.isArray(params)) {
+      const ev = parseEventOccured(did, params as Record<string, unknown>);
+      if (ev) {
+        this.emit("event", ev);
+      }
+      return;
+    }
+
     if (method === "props" && params && typeof params === "object" && !Array.isArray(params)) {
       const kv = params as Record<string, unknown>;
       this.emit("props", { did, params: kv } satisfies PropsPush);
@@ -252,6 +283,25 @@ export function buildStatusTopic(
 ): string {
   // Trailing slash is mandatory — the broker matches it literally.
   return `/status/${device.did}/${uid}/${device.model}/${region}/`;
+}
+
+export function parseEventOccured(
+  fallbackDid: string,
+  params: Record<string, unknown>,
+): EventOccuredPush | null {
+  const siid = params["siid"];
+  const eiid = params["eiid"];
+  if (typeof siid !== "number" || typeof eiid !== "number") {
+    return null;
+  }
+  const did = params["did"];
+  const args = params["arguments"];
+  return {
+    did: typeof did === "string" || typeof did === "number" ? String(did) : fallbackDid,
+    siid,
+    eiid,
+    arguments: Array.isArray(args) ? args : [],
+  };
 }
 
 export function parseInfoPush(did: string, params: Record<string, unknown>): InfoPush {
