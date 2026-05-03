@@ -75,3 +75,13 @@ member and the raw int side by side:
 
 Example: `VacuumState` carries `suction` (`SuctionLevel | null`) and
 `suctionRaw` (`number | null`).
+
+## HTTP header keys are always lowercase
+
+Every header key emitted from the library is lower-case
+(`"dreame-auth"`, `"content-type"`, `"user-agent"`, etc.). This isn't
+just style — Dreame's backend is case-sensitive in ways that surface as
+opaque 4xx responses if you mix in a `Content-Type` capital. Match the
+existing entries in `src/headers.ts` exactly, including the `dreame-*`
+custom keys, and lowercase any header keys you read off the wire (the
+`mockFetch` helper in tests does this for you when comparing).
