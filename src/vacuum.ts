@@ -834,8 +834,8 @@ export class Vacuum extends EventEmitter {
   /** Resolve `CleanOpts` → concrete (repeats, fan, water) ints with state-aware defaults. */
   #resolveCleanOpts(opts: CleanOpts): { repeats: number; fan: number; water: number } {
     const repeats = Math.max(1, Math.trunc(opts.repeats ?? 1));
-    const fan = opts.fan ?? this.#state.suctionRaw ?? 1;
-    const water = opts.water ?? this.#state.waterVolumeRaw ?? 2;
+    const fan = opts.fan ?? this.#state.suctionRaw ?? SuctionLevel.Standard;
+    const water = opts.water ?? this.#state.waterVolumeRaw ?? WaterVolume.Medium;
     return { repeats, fan, water };
   }
 
