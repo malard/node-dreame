@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-03
+
+Post-release code-review pass. No new device features — all changes are
+internal hygiene and small public-API refinements.
+
+### Breaking changes
+
+- **`Vacuum.refresh()` return type.** Now returns
+  `RefreshResult = { kind: "online" | "offline"; state: VacuumState }`
+  rather than bare `VacuumState`. The previous offline-by-side-effect
+  behaviour (silently returning a stale state with `online: false`) is
+  unchanged; the discriminator is now explicit on the return value.
+- **`DreameClientOptions.logger` signature.** Now
+  `(level, msg, meta?) => void` with `level: "debug" | "info" | "warn" |
+  "error"`. The previous `(msg, meta?)` form forced consumers to filter
+  by string content. New `DreameLogger` and `DreameLogLevel` types are
+  exported.
+- **`commands.extractResultArray` (internal but observable via
+  `DreameClient.getProperties`/`setProperties`).** Throws `DreameApiError`
+  instead of returning `[]` when the cloud's response shape is not
+  recognised — masking these used to hide bugs.
+
+### Features
+
+- **`AbortSignal` and per-call `timeoutMs` on every public async
+  method.** `getDevices`, `getProperties`, `setProperties`, `callAction`,
+  `Vacuum.fetchTotals` / `fetchTaskMap` / `fetchSavedMapList`, and
+  `OssFetcher.fetchBlob` all accept a `CallOptions { signal?, timeoutMs? }`.
+  Default request timeout is 30 s (was unbounded).
+- **Typed event emitters.** `Vacuum`, `MapManager`, and
+  `DreameSubscription` now extend a generic `TypedEmitter<E>` so
+  event-name typos fail at compile time. Each class exports its event
+  payload map (`VacuumEvents`, `MapManagerEvents`,
+  `DreameSubscriptionEvents`).
+- **`readonly` arrays on decoder output.** `MapData`, `MapLayer`,
+  `MapSegment`, `MapPath`, and `MapCleanedAreaOverlay` now mark every
+  array field `readonly` so renderers can't mutate the buffer
+  `MapManager` keeps as the running merged state.
+
+### Improvements
+
+- **HTTP request timeout** wired through `httpPostJson` via
+  `AbortSignal.timeout` (with an `AbortSignal.any` fallback path for
+  Node 18). Caller-supplied signals merge with the timeout.
+- **MapManager OSS-pointer ingests are serialised** through an internal
+  promise chain so two near-simultaneous PATH / POINTER_JSON pushes
+  with different `objName`s can no longer let a stale I-frame overwrite
+  a fresher one.
+- **`OssFetcher.fetchBlob` coalesces concurrent fetches** for the same
+  `(did, filename)` pair into a single network request.
+- **`MODEL_CAPABILITIES` table entries are deep-frozen** at module
+  load — a stray consumer mutation can no longer corrupt the table for
+  subsequent callers.
+- **`randomRequestId()` widened** from `[1000, 9999]` to a positive
+  31-bit integer, eliminating a correlation hazard for any future
+  concurrent fan-out.
+- **MQTT TLS rationale documented** at the `rejectUnauthorized: false`
+  call site, alongside the access-token refresh contract for the live
+  subscription.
+
+### Refactors (no behavioural change)
+
+- **`RequestContext.from(input)`** factory replaces four open-coded
+  conditional-spread blocks across `auth`, `commands`, `devices`, and
+  `map/oss-fetch`.
+- **`DreameClient` now passes its long-lived `RequestContext`** to
+  `commands.sendCommand` and `devices.listDevices` instead of
+  re-resolving region/host/etc. per call.
+- **Import cycle broken.** `buildHeaders` moved out of `auth.ts` into a
+  new `headers.ts`, eliminating the previous `auth → http → auth`
+  circular import.
+- **`Vacuum#requireOssContext` helper** replaces three repeated lazy-
+  init / session-check blocks in the map / fetchTaskMap /
+  fetchSavedMapList sites.
+- **`vacuum.ts` split.** The applier table + `VacuumState`,
+  `parseTaskCompleteEvent` + `CleaningHistoryRecord`, and
+  `decodeSavedMapList` moved into `src/vacuum/state.ts`,
+  `src/vacuum/task-complete.ts`, `src/vacuum/saved-maps.ts`. Public
+  exports re-bridged from `vacuum.ts` so import paths are unchanged.
+- **`miot-spec.ts` split.** Enum catalogue and `FEATURE_CONFIG_KEYS`
+  moved into `src/spec/enums.ts` and `src/spec/feature-config.ts`. Re-
+  exports keep the public surface stable.
+- **Magic numbers replaced.** `Vacuum#resolveCleanOpts` now references
+  `SuctionLevel.Standard` / `WaterVolume.Medium` for default fan/water
+  rather than literal `1` / `2`.
+
+### Docs
+
+- **`CONTRIBUTING.md`** added covering the JSDoc verification-tag
+  convention, naming conventions (`canX`/`hasX`/`supportsX`/`supportedXs`,
+  `#privateField`, `UPPER_SNAKE` for spec constants), the lowercase
+  HTTP header rule, the `Dreame*Error` boundary-throwing rule, the
+  explicit-Promise-return-type rule, the readonly-public-arrays rule,
+  the no-backwards-compat-scaffolding rule, the lazy-load-fixtures
+  rule, and the one-concept-per-file rule.
+
+### Tests
+
+- New tests cover the OSS-fetcher coalescing path, the HTTP timeout
+  and abort-signal paths, the `extractResultArray` throw path, the
+  `MODEL_CAPABILITIES` immutability guarantee, and the `Vacuum.refresh`
+  online / offline / re-throw discrimination. Suite is now 237 tests
+  (was 228).
+
 ## [0.1.0] - 2026-05-03
 
 Initial release. Pre-alpha — public API will change. See the README
