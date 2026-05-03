@@ -625,8 +625,11 @@ export function parsePathTr(tr: string): MapPath[] {
   if (!tr) {
     return [];
   }
-  const out: MapPath[] = [];
-  let current: MapPath | null = null;
+  // Locally mutable so we can push as we walk the regex matches; widened
+  // to the public `readonly`-decorated MapPath shape on return.
+  type MutablePath = { type: MapPathType; points: { x: number; y: number }[] };
+  const out: MutablePath[] = [];
+  let current: MutablePath | null = null;
   for (const m of tr.matchAll(PATH_OP_REGEX)) {
     const opRaw = m[1]!;
     const x = Number(m[2]);

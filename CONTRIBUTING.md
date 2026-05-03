@@ -114,6 +114,23 @@ Same convention for the synchronous setters that return arrays
 (`setSettings`, etc.) — declare the return type even when it's
 `Promise<unknown>`.
 
+## `readonly` on public array-typed fields
+
+Public types that contain arrays should mark them `readonly` so
+consumers can't mutate them in place — both because shared references
+(`MODEL_CAPABILITIES` table entries, decoded `MapData`) shouldn't be
+mutable from outside, and because mutation through the public API
+breaks downstream callers' assumptions.
+
+Already-followed: `DeviceCapabilities` (every array field is
+`readonly`), `MODEL_CAPABILITIES` (table entries deep-frozen at module
+load — see `capabilities.ts`).
+
+Extended at #25: `MapData`, `MapLayer`, `MapSegment`, `MapPath`,
+`MapCleanedAreaOverlay` — the decoder output is now `readonly` for
+arrays, so renderers can't mutate the buffer that `MapManager` keeps
+as the running merged state.
+
 ## HTTP header keys are always lowercase
 
 Every header key emitted from the library is lower-case

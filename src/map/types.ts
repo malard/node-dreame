@@ -75,7 +75,7 @@ export interface MapLayer {
   type: MapLayerType;
   /** Set when `type === "segment"`. Range 1..63. */
   segmentId?: number;
-  runs: MapRun[];
+  readonly runs: readonly MapRun[];
 }
 
 export interface MapSegment {
@@ -88,7 +88,7 @@ export interface MapSegment {
   /** mm, world-frame — useful as a label-anchor point. */
   centroid: MapPoint;
   /** Adjacent segment ids from `seg_inf.<id>.nei_id`. */
-  neighbours: number[];
+  readonly neighbours: readonly number[];
   /** Floor material code from `seg_inf.<id>.material`. */
   floorMaterial: number | null;
   /** Floor direction code from `seg_inf.<id>.direction`. */
@@ -100,7 +100,7 @@ export interface MapSegment {
 export interface MapPath {
   type: MapPathType;
   /** mm, world-frame. */
-  points: MapPoint[];
+  readonly points: readonly MapPoint[];
 }
 
 export interface MapObstacle {
@@ -202,9 +202,9 @@ export interface MapCleanedAreaOverlay {
   /** Inner blob's own dimensions — independent of the parent map's. */
   dimensions: MapDimensions;
   /** Pixels marked `cleaned` (low-bits == 1) in the inner grid. */
-  cleaned: MapRun[];
+  readonly cleaned: readonly MapRun[];
   /** Pixels marked `dirty` (low-bits == 2) in the inner grid. */
-  dirty: MapRun[];
+  readonly dirty: readonly MapRun[];
   /** Optional per-segment cleaned-area stats from the inner JSON tail. */
   cleanedSegments?: unknown;
 }
@@ -233,22 +233,22 @@ export interface MapData {
   docked: boolean;
 
   // ── Spatial layers (run-length encoded over the pixel grid) ──────
-  layers: MapLayer[];
+  readonly layers: readonly MapLayer[];
 
   // ── Segments (rooms) ─────────────────────────────────────────────
-  segments: MapSegment[];
+  readonly segments: readonly MapSegment[];
 
   // ── Cleaning path, broken into runs by op type ───────────────────
-  paths: MapPath[];
+  readonly paths: readonly MapPath[];
 
   // ── AI-detected obstacles ────────────────────────────────────────
-  obstacles: MapObstacle[];
+  readonly obstacles: readonly MapObstacle[];
 
   // ── User-defined geometry (from JSON tail's `vw`) ────────────────
   /** Line-segment virtual walls. Empty array when none configured. */
-  virtualWalls: MapVirtualWall[];
+  readonly virtualWalls: readonly MapVirtualWall[];
   /** Axis-aligned restricted areas — both no-go (`vw.rect`) and no-mop (`vw.mop`). */
-  restrictedAreas: MapRestrictedArea[];
+  readonly restrictedAreas: readonly MapRestrictedArea[];
 
   // ── Cleaned-area overlay (from JSON tail's `decmap`) ─────────────
   /**
