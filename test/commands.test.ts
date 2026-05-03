@@ -51,12 +51,13 @@ describe("getProperties", () => {
     expect(body.data.params).toHaveLength(2);
   });
 
-  it("returns empty array when the cloud sends no result field", async () => {
+  it("throws DreameApiError when the cloud sends no result field", async () => {
     const fetchImpl = mockFetch({
       "POST /device/sendCommand": { status: 200, json: { code: 0, data: {} } },
     });
-    const out = await getProperties({ ...COMMON, fetchImpl }, [{ siid: 1, piid: 1 }]);
-    expect(out).toEqual([]);
+    await expect(
+      getProperties({ ...COMMON, fetchImpl }, [{ siid: 1, piid: 1 }]),
+    ).rejects.toThrow(/get_properties: response did not contain a result array/);
   });
 });
 

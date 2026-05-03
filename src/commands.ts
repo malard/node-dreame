@@ -1,6 +1,7 @@
 import type { DreameRegion, DreameSession } from "./types.js";
 import { COMMAND_FROM_FIELD, IOT_COM_PREFIX_DREAME } from "./config.js";
 import { randomRequestId } from "./crypto.js";
+import { DreameApiError } from "./errors.js";
 import { httpPostJsonBody, RequestContext, type BaseResponse } from "./http.js";
 
 /** A single MIoT property reference (service + property id). */
@@ -116,7 +117,7 @@ export async function getProperties(
 ): Promise<PropertyResult[]> {
   const params = props.map((p) => ({ did: base.did, siid: p.siid, piid: p.piid }));
   const res = await sendCommand({ ...base, method: "get_properties", params });
-  return extractResultArray(res);
+  return extractResultArray(res, "get_properties");
 }
 
 /** Write one or more MIoT properties to a device. */
@@ -131,7 +132,7 @@ export async function setProperties(
     value: p.value,
   }));
   const res = await sendCommand({ ...base, method: "set_properties", params });
-  return extractResultArray(res);
+  return extractResultArray(res, "set_properties");
 }
 
 /**
@@ -156,13 +157,22 @@ export async function callAction(base: CommonInput, action: MiotAction): Promise
  * Pull the per-property result array out of a sendCommand response.
  * Dreame's response shape is consistent enough to type, but we still tolerate
  * the data being one nesting level shallower (some firmware variants).
+ *
+ * Throws `DreameApiError` if neither shape is present — silently returning
+ * `[]` here masks bugs (e.g. an unexpected response envelope from a future
+ * firmware change). Callers can catch and downgrade to `[]` if they want
+ * the old behaviour.
  */
-function extractResultArray(res: SendCommandResponse): PropertyResult[] {
+function extractResultArray(res: SendCommandResponse, context: string): PropertyResult[] {
   if (Array.isArray(res.data?.result)) {
     return res.data.result as PropertyResult[];
   }
   if (Array.isArray(res.result)) {
     return res.result as PropertyResult[];
   }
-  return [];
+  throw new DreameApiError(
+    `${context}: response did not contain a result array — ${JSON.stringify(res).slice(0, 200)}`,
+    200,
+    res,
+  );
 }
