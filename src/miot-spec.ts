@@ -586,8 +586,18 @@ export const CLOUD_OBJ_PROP = {
    */
   MAP_DATA: { siid: 6, piid: 1 } as const,
   /**
-   * VERIFIED on r2532a: object path string `ali_dreame/<uid>/<did>/<n>`.
-   * The integer suffix appears to bump on every new session/stream.
+   * VERIFIED on r2532a: object path string `ali_dreame/<uid>/<did>/<n>`
+   * pointing at the OSS-stored live I-frame.
+   *
+   * The integer suffix is **not monotonic** — verified live during a
+   * cleaning task on 2026-05-03, the device cycles through a small
+   * ring of slots (0..6 observed). Each push means "the I-frame at
+   * this slot has been refreshed; come fetch it." The same slot may
+   * be revisited; treat each push as a fresh I-frame regardless of
+   * the integer suffix.
+   *
+   * Implication: dedupe consecutive PATH pushes by `obj_name` (which
+   * `MapManager` does), not by tracking a high-water-mark integer.
    */
   PATH: { siid: 6, piid: 3 } as const,
   /**
