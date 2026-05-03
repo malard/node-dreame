@@ -200,4 +200,34 @@ describe("OssFetcher.fetchBlob", () => {
       status: 403,
     });
   });
+
+  it("coalesces concurrent fetchBlob calls for the same (did, filename)", async () => {
+    let getCount = 0;
+    let releaseGet: (() => void) | null = null;
+    const gate = new Promise<void>((r) => {
+      releaseGet = r;
+    });
+    const fetchImpl = mockFetch({
+      "POST /dreame-user-iot/iotfile/getDownloadUrl": {
+        json: { code: 0, data: "https://oss.example/blob?sig=abc" },
+      },
+      "GET https://oss.example/blob": async () => {
+        getCount++;
+        await gate;
+        return { text: "payload" };
+      },
+    });
+    const fetcher = new OssFetcher({ fetchImpl });
+
+    const a = fetcher.fetchBlob(COMMON_INPUT);
+    const b = fetcher.fetchBlob(COMMON_INPUT);
+    releaseGet!();
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(ra.toString("utf8")).toBe("payload");
+    expect(rb.toString("utf8")).toBe("payload");
+    // Single underlying GET despite two concurrent callers.
+    expect(getCount).toBe(1);
+    // Resolve URL still happens once thanks to the URL cache.
+    expect(fetchImpl.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+  });
 });

@@ -67,6 +67,8 @@ export class OssFetcher {
   private readonly now: () => number;
   private readonly fetchImpl: typeof fetch;
   private readonly cache = new Map<string, CacheEntry>();
+  /** In-flight fetchBlob calls, keyed `did:filename`. Lets us coalesce concurrent fetches for the same blob. */
+  private readonly inflight = new Map<string, Promise<Buffer>>();
 
   constructor(opts: OssFetcherOpts = {}) {
     this.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
@@ -125,8 +127,27 @@ export class OssFetcher {
     return resp.data;
   }
 
-  /** Resolve, GET the signed URL, and return the raw bytes. */
+  /**
+   * Resolve, GET the signed URL, and return the raw bytes.
+   *
+   * Concurrent calls for the same `(did, filename)` pair are coalesced
+   * into a single network request — the second caller awaits the first's
+   * Promise instead of issuing a duplicate fetch.
+   */
   async fetchBlob(input: OssFetchInput): Promise<Buffer> {
+    const key = `${input.did}:${input.filename}`;
+    const existing = this.inflight.get(key);
+    if (existing) {
+      return existing;
+    }
+    const promise = this.#doFetchBlob(input).finally(() => {
+      this.inflight.delete(key);
+    });
+    this.inflight.set(key, promise);
+    return promise;
+  }
+
+  async #doFetchBlob(input: OssFetchInput): Promise<Buffer> {
     const url = await this.resolveUrl(input);
     let res: Response;
     try {
