@@ -22,6 +22,7 @@ import {
   MiotState,
   SETTINGS_PROP,
   SuctionLevel,
+  TOTALS_PROP,
   VACUUM_ACTION,
   VACUUM_PROP,
   WaterVolume,
@@ -157,6 +158,21 @@ const EMPTY_STATE: VacuumState = {
  *   shapes mirror Tasshack and `cleanSegments`'s verification covers
  *   the START_CUSTOM dispatch path.
  */
+/**
+ * Cumulative lifetime stats from the device's totals service (siid 12).
+ * Returned by `Vacuum.fetchTotals()`.
+ */
+export interface DeviceTotals {
+  /** Date of the device's first cleaning task. `null` if never cleaned. */
+  firstCleaningDate: Date | null;
+  /** Total cleaning runtime in minutes, lifetime. */
+  totalCleaningMinutes: number | null;
+  /** Total number of cleaning tasks completed, lifetime. */
+  cleaningCount: number | null;
+  /** Total cleaned area in square metres, lifetime. */
+  totalCleanedAreaSqm: number | null;
+}
+
 /** Mode values for the START_CUSTOM action's `STATUS` in-param (siid 4 piid 1). */
 const CUSTOM_CLEAN_MODE = {
   SEGMENT: 18,
@@ -516,6 +532,46 @@ export class Vacuum extends EventEmitter {
   /** Send the robot back to its dock. Same wire call as `dock()`. */
   goHome(): Promise<unknown> {
     return this.dock();
+  }
+
+  // ─── lifetime totals ───────────────────────────────────────────────
+
+  /**
+   * Cumulative lifetime cleaning statistics for this device.
+   *
+   * Per-task history (a list of `{when, area, duration}` records for
+   * every past task) is NOT exposed by this API — Dreame native
+   * doesn't surface it the way Mi-cloud does, and the equivalent
+   * endpoint is currently unknown. What you get here is the running
+   * totals plus the date the device's first cleaning happened.
+   *
+   * VERIFIED on r2532a 2026-05-03 (matched Tasshack's
+   * `types.py:657-660` mapping exactly).
+   */
+  async fetchTotals(): Promise<DeviceTotals> {
+    const results = await this.#client.getProperties(this.device.did, [
+      TOTALS_PROP.FIRST_CLEANING_DATE,
+      TOTALS_PROP.TOTAL_CLEANING_TIME,
+      TOTALS_PROP.CLEANING_COUNT,
+      TOTALS_PROP.TOTAL_CLEANED_AREA,
+    ]);
+    const lookup = (siid: number, piid: number): number | null => {
+      const r = results.find((x) => x.siid === siid && x.piid === piid);
+      if (!r || r.code !== 0 || typeof r.value !== "number") {
+        return null;
+      }
+      return r.value;
+    };
+    const firstEpochSec = lookup(12, 1);
+    return {
+      firstCleaningDate:
+        firstEpochSec !== null && firstEpochSec > 0
+          ? new Date(firstEpochSec * 1000)
+          : null,
+      totalCleaningMinutes: lookup(12, 2),
+      cleaningCount: lookup(12, 3),
+      totalCleanedAreaSqm: lookup(12, 4),
+    };
   }
 
   // ─── saved maps ────────────────────────────────────────────────────

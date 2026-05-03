@@ -26,7 +26,7 @@ export type {
   RawMqttEvent,
 } from "./mqtt.js";
 export { Vacuum } from "./vacuum.js";
-export type { VacuumState } from "./vacuum.js";
+export type { VacuumState, DeviceTotals, CleanOpts } from "./vacuum.js";
 export {
   MiotState,
   ChargingStatus,
@@ -53,6 +53,7 @@ export {
   CAMERA_PROP,
   DOCK_PROP,
   AUTO_EMPTY_PROP,
+  TOTALS_PROP,
   SCHEDULE_PROP,
   WASHBOARD_PROP,
   SCHEDULE_FIELD8,

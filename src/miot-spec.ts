@@ -106,8 +106,32 @@ export const VACUUM_PROP = {
    * than MiotState alone — distinguishes the sub-step within e.g. a
    * mop-install sequence. Previously misnamed `WASHBOARD_PROP.STEP`
    * (it's a general task-step indicator, not washboard-specific).
+   *
+   * NOTE: Tasshack (`types.py:578`) labels this same piid as `TASK_STATUS`.
+   * The label difference is semantic — values 1/6/16/25/26 we observed
+   * fit either reading.
    */
   STEP_INDICATOR: { siid: 4, piid: 7 } as const,
+  /**
+   * ASSUMED Tasshack `types.py:579` — unix-epoch (seconds) timestamp
+   * for the start of the *current* cleaning task. Empty when idle.
+   * Populated during/after a task; not yet observed live on r2532a.
+   */
+  CLEANING_START_TIME: { siid: 4, piid: 8 } as const,
+  /**
+   * ASSUMED Tasshack `types.py:580` — log filename for the current /
+   * most-recent task (used by Mi-cloud's history view to fetch the
+   * per-task cleaned-area map). Empty when idle. Not yet observed live
+   * on r2532a; the equivalent fetch endpoint on Dreame native is
+   * unknown.
+   */
+  CLEAN_LOG_FILE_NAME: { siid: 4, piid: 9 } as const,
+  /**
+   * ASSUMED Tasshack `types.py:585` — completion bool for the most-
+   * recent task (`true` if it ended cleanly, `false` if cancelled or
+   * errored). Empty when idle. Not yet observed live on r2532a.
+   */
+  CLEAN_LOG_STATUS: { siid: 4, piid: 13 } as const,
   /**
    * ASSUMED Tasshack types.py:576 — water flow level **during active cleaning**
    * (mop on the floor). NOT to be confused with `MOP_WASH_WATER_LEVEL` (siid 4
@@ -485,6 +509,25 @@ export const WASHBOARD_PROP = {
    * this property — it's actual device-side feedback, not a UI estimate.
    */
   COUNTDOWN_SECS: { siid: 4, piid: 61 } as const,
+} as const;
+
+/**
+ * Cumulative-totals service (siid 12) — lifetime cleaning statistics.
+ *
+ * VERIFIED on r2532a 2026-05-03: all four piids return the matching
+ * Tasshack-named values (`types.py:657-660`). siid 12 piids 5/6 also
+ * read as 0 but Tasshack's mapping doesn't claim them — likely
+ * unallocated padding on this firmware.
+ */
+export const TOTALS_PROP = {
+  /** Unix epoch (seconds) of the device's first cleaning task. */
+  FIRST_CLEANING_DATE: { siid: 12, piid: 1 } as const,
+  /** Cumulative cleaning runtime in minutes, across the device's lifetime. */
+  TOTAL_CLEANING_TIME: { siid: 12, piid: 2 } as const,
+  /** Total number of cleaning tasks completed since first use. */
+  CLEANING_COUNT: { siid: 12, piid: 3 } as const,
+  /** Cumulative cleaned area in square metres, across the device's lifetime. */
+  TOTAL_CLEANED_AREA: { siid: 12, piid: 4 } as const,
 } as const;
 
 /**
