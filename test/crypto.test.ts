@@ -79,12 +79,21 @@ describe("randomMqttClientId", () => {
 });
 
 describe("randomRequestId", () => {
-  it("returns an integer in [1000, 9999]", () => {
+  it("returns a positive 31-bit integer", () => {
     for (let i = 0; i < 1000; i++) {
       const id = randomRequestId();
       expect(Number.isInteger(id)).toBe(true);
-      expect(id).toBeGreaterThanOrEqual(1000);
-      expect(id).toBeLessThanOrEqual(9999);
+      expect(id).toBeGreaterThanOrEqual(1);
+      expect(id).toBeLessThanOrEqual(0x7fffffff);
     }
+  });
+
+  it("rarely collides across many calls", () => {
+    const ids = new Set<number>();
+    for (let i = 0; i < 1000; i++) {
+      ids.add(randomRequestId());
+    }
+    // 1000 picks from ~2.1B values: collisions are astronomically unlikely.
+    expect(ids.size).toBe(1000);
   });
 });

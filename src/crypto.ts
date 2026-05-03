@@ -40,7 +40,15 @@ export function randomMqttClientId(): string {
   return "p_" + randomBytes(8).toString("hex");
 }
 
-/** Random integer in [1000, 9999] — the request id range used by sendCommand. */
+/**
+ * Random positive 31-bit integer for the `id` field of a sendCommand
+ * envelope. Wide enough that concurrent fan-out won't collide even at
+ * thousands of in-flight requests.
+ *
+ * (The Dreamehome app picks from a much narrower range, but Dreame's
+ * cloud doesn't appear to constrain the value — wider is strictly safer
+ * for correlation purposes.)
+ */
 export function randomRequestId(): number {
-  return 1000 + Math.floor(Math.random() * 9000);
+  return Math.floor(Math.random() * 0x7fffffff) + 1;
 }
