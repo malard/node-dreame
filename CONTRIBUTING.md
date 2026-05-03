@@ -150,6 +150,38 @@ or fallback paths for older firmware. Specifically:
   change to a published method needs a CHANGELOG entry but does not
   need a deprecation cycle.
 
+## Lazy-load test fixtures inside `it()` callbacks
+
+Fixture files (`test/fixtures/...`) must be read inside the test body,
+not at the top of the test module or inside `describe()`:
+
+```ts
+// ❌ wrong — runs at describe() collection time, hits ENOENT in CI
+const fixture = readFileSync("test/fixtures/foo.bin");
+
+describe("decoder", () => {
+  it("decodes foo", () => {
+    expect(decode(fixture)).toBeTruthy();
+  });
+});
+
+// ✅ correct — runs inside the it() callback only when the test runs
+describe("decoder", () => {
+  it("decodes foo", () => {
+    const fixture = readFileSync("test/fixtures/foo.bin");
+    expect(decode(fixture)).toBeTruthy();
+  });
+});
+```
+
+Reason: `describe.skip(...)` doesn't prevent the describe-block body
+from executing — only the inner `it()`s. Reading fixtures at describe
+scope therefore runs even when the test is skipped, and CI environments
+that don't ship the fixtures get an unrelated `ENOENT` failure.
+
+This bit us once. The repo's vitest config already runs the project
+test suite green; the rule is here to keep it that way.
+
 ## HTTP header keys are always lowercase
 
 Every header key emitted from the library is lower-case
