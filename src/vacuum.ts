@@ -428,30 +428,18 @@ export class Vacuum extends EventEmitter {
     if (this.#mapManager) {
       return this.#mapManager;
     }
-    if (!this.#ossFetcher) {
-      this.#ossFetcher = new OssFetcher();
-    }
+    const { fetcher } = this.#requireOssContext("vacuum.map");
     const client = this.#client;
     const device = this.device;
     this.#mapManager = new MapManager({
       source: this.#subscription,
       did: device.did,
-      ossFetcher: this.#ossFetcher,
-      ossInput: (): OssInputBase => {
-        const session = client.session;
-        if (!session) {
-          throw new DreameTransportError("vacuum.map: no active session for OSS fetch");
-        }
-        return {
-          host: client.apiHost,
-          accessToken: session.accessToken,
-          region: client.region,
-          country: client.country,
-          lang: client.lang,
-          did: device.did,
-          model: device.model,
-        };
-      },
+      ossFetcher: fetcher,
+      // ossInput is a callback so MapManager picks up a refreshed access
+      // token / current session on each fetch (long-running connections
+      // outlive the initial token's expiry). Re-derive via the shared
+      // helper each call.
+      ossInput: (): OssInputBase => this.#requireOssContext("vacuum.map").base,
       frameRequester: clientFrameRequester(client, device.did),
     });
     this.#mapManager.start();
@@ -658,25 +646,8 @@ export class Vacuum extends EventEmitter {
    * endpoint as live blobs (no separate "permanent" endpoint needed).
    */
   async fetchTaskMap(logFileName: string): Promise<MapData> {
-    if (!this.#ossFetcher) {
-      this.#ossFetcher = new OssFetcher();
-    }
-    const session = this.#client.session;
-    if (!session) {
-      throw new DreameTransportError(
-        "fetchTaskMap: no active session — call .login() first",
-      );
-    }
-    const bytes = await this.#ossFetcher.fetchBlob({
-      host: this.#client.apiHost,
-      accessToken: session.accessToken,
-      region: this.#client.region,
-      country: this.#client.country,
-      lang: this.#client.lang,
-      did: this.device.did,
-      model: this.device.model,
-      filename: logFileName,
-    });
+    const { fetcher, base } = this.#requireOssContext("fetchTaskMap");
+    const bytes = await fetcher.fetchBlob({ ...base, filename: logFileName });
     return MapDecoder.decode(bytes.toString("utf8"));
   }
 
@@ -725,27 +696,8 @@ export class Vacuum extends EventEmitter {
       return null;
     }
     const objName: string = objNameRaw;
-
-    if (!this.#ossFetcher) {
-      this.#ossFetcher = new OssFetcher();
-    }
-    const session = this.#client.session;
-    if (!session) {
-      throw new DreameTransportError(
-        "fetchSavedMapList: no active session — call .login() first",
-      );
-    }
-    const bytes = await this.#ossFetcher.fetchBlob({
-      host: this.#client.apiHost,
-      accessToken: session.accessToken,
-      region: this.#client.region,
-      country: this.#client.country,
-      lang: this.#client.lang,
-      did: this.device.did,
-      model: this.device.model,
-      filename: objName,
-    });
-
+    const { fetcher, base } = this.#requireOssContext("fetchSavedMapList");
+    const bytes = await fetcher.fetchBlob({ ...base, filename: objName });
     return decodeSavedMapList(bytes);
   }
 
@@ -830,6 +782,39 @@ export class Vacuum extends EventEmitter {
   }
 
   // ─── internals ─────────────────────────────────────────────────────
+
+  /**
+   * Lazy-init the shared OssFetcher and pull a current OSS input base
+   * (host/auth/region/etc.) from the live session. Throws
+   * `DreameTransportError` if the client has no session yet.
+   *
+   * Used by `vacuum.map` (lazy MapManager construction), `fetchTaskMap`,
+   * and `fetchSavedMapList` — each previously open-coded the same
+   * `if (!this.#ossFetcher) … if (!session) throw …` pair.
+   */
+  #requireOssContext(opName: string): { fetcher: OssFetcher; base: OssInputBase } {
+    if (!this.#ossFetcher) {
+      this.#ossFetcher = new OssFetcher();
+    }
+    const session = this.#client.session;
+    if (!session) {
+      throw new DreameTransportError(
+        `${opName}: no active session — call .login() first`,
+      );
+    }
+    return {
+      fetcher: this.#ossFetcher,
+      base: {
+        host: this.#client.apiHost,
+        accessToken: session.accessToken,
+        region: this.#client.region,
+        country: this.#client.country,
+        lang: this.#client.lang,
+        did: this.device.did,
+        model: this.device.model,
+      },
+    };
+  }
 
   /** Resolve `CleanOpts` → concrete (repeats, fan, water) ints with state-aware defaults. */
   #resolveCleanOpts(opts: CleanOpts): { repeats: number; fan: number; water: number } {
