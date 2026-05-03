@@ -1,8 +1,8 @@
-import { EventEmitter } from "node:events";
 import mqtt, { type MqttClient } from "mqtt";
 import type { DreameDevice, DreameRegion, DreameSession } from "./types.js";
 import { DreameTransportError } from "./errors.js";
 import { randomMqttClientId } from "./crypto.js";
+import { TypedEmitter } from "./typed-emitter.js";
 
 /** A single property update pushed by the device. */
 export interface PropertyChange {
@@ -130,7 +130,24 @@ interface SubscriptionInput {
  * the recovery path would be `close()` + `client.subscribe(device)` again
  * if/when that becomes necessary.
  */
-export class DreameSubscription extends EventEmitter {
+/**
+ * Event payload map for `DreameSubscription`. Keys must match the strings
+ * emitted by `#handleMessage`; payloads must match the corresponding
+ * `emit(...)` arity. See `TypedEmitter` for how this is enforced.
+ */
+export type DreameSubscriptionEvents = {
+  properties: [PropertyChange[]];
+  event: [EventOccuredPush];
+  props: [PropsPush];
+  info: [InfoPush];
+  ota: [OtaEvent];
+  message: [RawMqttEvent];
+  connect: [];
+  close: [];
+  error: [Error];
+};
+
+export class DreameSubscription extends TypedEmitter<DreameSubscriptionEvents> {
   readonly #device: DreameDevice;
   readonly #session: DreameSession;
   readonly #region: DreameRegion;

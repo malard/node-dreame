@@ -1,6 +1,6 @@
-import { EventEmitter } from "node:events";
 import type { DreameClient } from "./client.js";
 import type { DreameDevice } from "./types.js";
+import { TypedEmitter } from "./typed-emitter.js";
 import type {
   DreameSubscription,
   EventOccuredPush,
@@ -270,7 +270,26 @@ export interface CleanOpts {
   water?: number;
 }
 
-export class Vacuum extends EventEmitter {
+/**
+ * Event payload map for `Vacuum`. Keys are the strings the class emits
+ * via `this.emit(...)`; payloads must match the listener signature.
+ *
+ * - `change`: fires whenever the cached `state` materially changes
+ *   (after refresh / property push / OTA snapshot update / online flip).
+ * - `taskComplete`: fires once per `event_occured siid 4 eiid 1` push
+ *   carrying the parsed per-task summary record.
+ * - `ota`: convenience mirror of the underlying subscription's `ota`
+ *   event after merge into the cached snapshot.
+ * - `error`: forwarded from the underlying `DreameSubscription`.
+ */
+export type VacuumEvents = {
+  change: [VacuumState];
+  taskComplete: [CleaningHistoryRecord];
+  ota: [OtaEvent];
+  error: [Error];
+};
+
+export class Vacuum extends TypedEmitter<VacuumEvents> {
   readonly device: DreameDevice;
   readonly #client: DreameClient;
   #state: VacuumState = { ...EMPTY_STATE };

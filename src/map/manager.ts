@@ -37,10 +37,11 @@
  * `OssFetcher` already accepts an injected `fetch`.
  */
 
-import { EventEmitter } from "node:events";
+import type { EventEmitter } from "node:events";
 import type { PropertyChange } from "../mqtt.js";
 import type { DreameLogger } from "../types.js";
 import { CLOUD_OBJ_PROP } from "../miot-spec.js";
+import { TypedEmitter } from "../typed-emitter.js";
 import {
   MapDecodeError,
   MapDecoder,
@@ -113,7 +114,17 @@ export function clientFrameRequester(client: DreameClient, did: string): FrameRe
   };
 }
 
-export class MapManager extends EventEmitter {
+/**
+ * Event payload map for `MapManager`. `'map'` carries the latest decoded
+ * `MapData` (after I-frame ingest or P-frame merge); `'error'` carries
+ * any decoder/transport/merge failure surfaced via `#emitError`.
+ */
+export type MapManagerEvents = {
+  map: [MapData];
+  error: [Error];
+};
+
+export class MapManager extends TypedEmitter<MapManagerEvents> {
   readonly #source: EventEmitter;
   readonly #did: string;
   readonly #ossFetcher: OssFetcher;
