@@ -137,11 +137,21 @@ const EMPTY_STATE: VacuumState = {
  * ```
  *
  * **Verification status:** built/tested against `dreame.vacuum.r2532a`
- * (X50 Ultra Complete). Read paths verified for state/error/battery/charging
- * and the consumable/volume reads. Action paths verified for LOCATE,
- * TEST_SOUND, and CLEAR_WARNING. START/PAUSE/STOP/DOCK and the various
- * setters are wired but NOT YET exercised against this hardware — they use
- * Tasshack's standard mappings which work on older Dreames.
+ * (X50 Ultra Complete).
+ *
+ * - Read paths verified for state / error / battery / charging /
+ *   consumables / volume / suction / water.
+ * - Action wire shapes VERIFIED on r2532a 2026-05-03 by firing the
+ *   call against the live device while idle:
+ *     LOCATE, TEST_SOUND, CLEAR_WARNING (already verified earlier);
+ *     PAUSE, STOP, DOCK / goHome (returned code 0 when called while
+ *     idle — wire correct, behaviour during an active task still
+ *     untested);
+ *     setSuction, setVolume (round-trip read-back confirmed).
+ * - Still untested end-to-end (would actually run the robot):
+ *   START, cleanSegments / cleanZones / cleanSpot, startAutoEmpty.
+ *   Wire shapes mirror Tasshack and are believed correct, but not
+ *   yet fired against r2532a.
  */
 /** Mode values for the START_CUSTOM action's `STATUS` in-param (siid 4 piid 1). */
 const CUSTOM_CLEAN_MODE = {
@@ -364,22 +374,36 @@ export class Vacuum extends EventEmitter {
 
   // ─── commands ──────────────────────────────────────────────────────
 
-  /** ASSUMED action mapping — NOT YET verified on r2532a. */
+  /**
+   * ASSUMED action mapping — would actually start cleaning, so not
+   * fired during verification. Wire shape mirrors Tasshack.
+   */
   start(): Promise<unknown> {
     return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.START, in: [] });
   }
 
-  /** ASSUMED action mapping — NOT YET verified on r2532a. */
+  /**
+   * Wire VERIFIED on r2532a 2026-05-03 (returned code 0 when called
+   * while idle). Behaviour during an active cleaning task — does it
+   * actually pause? — still untested.
+   */
   pause(): Promise<unknown> {
     return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.PAUSE, in: [] });
   }
 
-  /** ASSUMED action mapping — NOT YET verified on r2532a. */
+  /**
+   * Wire VERIFIED on r2532a 2026-05-03 (returned code 0 when called
+   * while idle). Behaviour during an active task still untested.
+   */
   stop(): Promise<unknown> {
     return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.STOP, in: [] });
   }
 
-  /** ASSUMED action mapping — NOT YET verified on r2532a. */
+  /**
+   * Wire VERIFIED on r2532a 2026-05-03 (returned code 0 when already
+   * docked — idempotent). Behaviour mid-task — does it actually
+   * recall the robot? — still untested.
+   */
   dock(): Promise<unknown> {
     return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.CHARGE, in: [] });
   }
@@ -556,7 +580,10 @@ export class Vacuum extends EventEmitter {
 
   // ─── settings ──────────────────────────────────────────────────────
 
-  /** ASSUMED enum — NOT YET verified end-to-end on r2532a. */
+  /**
+   * VERIFIED end-to-end on r2532a 2026-05-03 — round-trip
+   * `Standard → Quiet → Standard` confirmed via property read-back.
+   */
   setSuction(level: SuctionLevel): Promise<unknown> {
     return this.#client.setProperties(this.device.did, [
       { ...VACUUM_PROP.SUCTION_LEVEL, value: level },
@@ -580,6 +607,10 @@ export class Vacuum extends EventEmitter {
     ]);
   }
 
+  /**
+   * VERIFIED end-to-end on r2532a 2026-05-03 — round-trip
+   * `90 → 50 → 90` confirmed via property read-back.
+   */
   setVolume(volume: number): Promise<unknown> {
     if (volume < 0 || volume > 100) {
       throw new RangeError("volume must be 0-100");
