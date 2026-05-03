@@ -98,6 +98,22 @@ public method boundaries (e.g. `cleanSegments([])`); never use a plain
 context tag in the message ("auth: …", "device list: …",
 "sendCommand: …", etc.).
 
+## Explicit return types on public async methods
+
+Every exported async method must declare its return type explicitly
+(`Promise<DreameDevice[]>`, `Promise<RefreshResult>`, etc.) rather than
+relying on inference. Two reasons:
+
+1. The compiler catches accidental shape drift before it hits a
+   downstream consumer who's typed against the inferred type.
+2. The `dist/index.d.ts` declarations stay readable — inferred return
+   types tend to widen into long unions when the body ends up calling
+   another function whose return type is itself widened.
+
+Same convention for the synchronous setters that return arrays
+(`setSettings`, etc.) — declare the return type even when it's
+`Promise<unknown>`.
+
 ## HTTP header keys are always lowercase
 
 Every header key emitted from the library is lower-case
