@@ -76,6 +76,28 @@ member and the raw int side by side:
 Example: `VacuumState` carries `suction` (`SuctionLevel | null`) and
 `suctionRaw` (`number | null`).
 
+## Errors at module boundaries
+
+Anything thrown by a public API path should be a subclass of
+`DreameError` (defined in `src/errors.ts`):
+
+- **`DreameAuthError`** — login / refresh failures, missing
+  `access_token`, malformed token responses.
+- **`DreameApiError`** — non-2xx HTTP responses, non-zero `code` in a
+  cloud response, malformed JSON body.
+- **`DreameDeviceOfflineError`** — specifically `code: 80001` ("device
+  may be offline, command sending timed out"). Subclass of
+  `DreameApiError` so existing `instanceof DreameApiError` checks still
+  match.
+- **`DreameTransportError`** — network failures, MQTT connection
+  failures, AbortSignal-driven timeouts.
+
+`RangeError` / `TypeError` are acceptable for **input validation** at
+public method boundaries (e.g. `cleanSegments([])`); never use a plain
+`throw new Error(...)` — wrap into a `Dreame*Error` subclass with a
+context tag in the message ("auth: …", "device list: …",
+"sendCommand: …", etc.).
+
 ## HTTP header keys are always lowercase
 
 Every header key emitted from the library is lower-case
