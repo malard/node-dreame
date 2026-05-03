@@ -128,6 +128,15 @@ export class MapManager extends EventEmitter {
   #lastIFrameObjName: string | null = null;
   #pending = new Map<number, Buffer>();
   #started = false;
+  /**
+   * Serialises OSS-pointer ingests. Without this, PATH and POINTER_JSON
+   * pushes for two distinct objNames arriving milliseconds apart could
+   * resolve out of order and let a stale I-frame overwrite a fresher one
+   * — the existing `frameId > decoded.frameId` guard only catches same-
+   * mapId regressions and wouldn't catch e.g. a slow PATH followed by a
+   * fast POINTER_JSON for the same generation.
+   */
+  #ingestQueue: Promise<void> = Promise.resolve();
 
   constructor(opts: MapManagerOpts) {
     super();
@@ -257,7 +266,26 @@ export class MapManager extends EventEmitter {
     await this.#fetchAndIngestOssBlob(objName);
   }
 
-  async #fetchAndIngestOssBlob(objName: string): Promise<void> {
+  /**
+   * Resolve an OSS-pointer push to bytes and ingest as an I-frame.
+   *
+   * Serialised through `#ingestQueue`: each invocation chains onto the
+   * previous one, so two near-simultaneous pushes (e.g. a PATH and
+   * POINTER_JSON each carrying a distinct objName) can never apply out
+   * of order. The dedupe-by-objName check happens INSIDE the queued
+   * step so we don't accidentally drop a fresh objName that arrived
+   * while we were still serving the previous one.
+   */
+  #fetchAndIngestOssBlob(objName: string): Promise<void> {
+    const next = this.#ingestQueue.then(() => this.#fetchAndIngestOssBlobNow(objName));
+    // Swallow rejections on the chain itself — errors are surfaced via
+    // `emit('error')` inside `#fetchAndIngestOssBlobNow`. We don't want
+    // a single failure to break the chain for subsequent pushes.
+    this.#ingestQueue = next.catch(() => undefined);
+    return next;
+  }
+
+  async #fetchAndIngestOssBlobNow(objName: string): Promise<void> {
     if (objName === this.#lastIFrameObjName) {
       return;
     }
