@@ -14,7 +14,6 @@ import {
   OssFetcher,
   clientFrameRequester,
   type MapData,
-  type MapSaved,
   type MapSavedList,
   type OssInputBase,
 } from "./map/index.js";
@@ -25,8 +24,6 @@ import {
   CLOUD_OBJ_PROP,
   CONSUMABLE_PROP,
   CleaningMode,
-  ChargingStatus,
-  MiotState,
   SETTINGS_PROP,
   SuctionLevel,
   TOTALS_PROP,
@@ -34,111 +31,17 @@ import {
   VACUUM_PROP,
   WaterVolume,
 } from "./miot-spec.js";
+import { APPLIERS, EMPTY_STATE, propKey, type VacuumState } from "./vacuum/state.js";
+import {
+  parseTaskCompleteEvent,
+  type CleaningHistoryRecord,
+} from "./vacuum/task-complete.js";
+import { decodeSavedMapList } from "./vacuum/saved-maps.js";
 
-/**
- * Typed snapshot of the most-recently-known device state.
- *
- * Field naming convention:
- *   - `<name>` (typed)         → enum/struct value where we have a VERIFIED mapping
- *   - `raw<Name>` / `<name>Raw` → raw integer for fields where the enum is ASSUMED
- *                                 or value space is not yet decoded
- *
- * See `miot-spec.ts` for which siid/piid combos are verified vs assumed.
- */
-export interface VacuumState {
-  /** MIoT STATE (siid 2 piid 1). VERIFIED enum mapping for r2532a. */
-  miotState: MiotState | null;
-  /** Raw int from siid 2 piid 1 — present even when outside the known enum. */
-  miotStateRaw: number | null;
-  /** Error/fault code (siid 2 piid 2). 0 = clear. */
-  errorCode: number | null;
-
-  /**
-   * Dreame "task status" raw int (siid 4 piid 1).
-   * NOT enum-mapped: Tasshack's older-model enum does not match observed
-   * r2532a values, and we don't yet have a translated keyDefine for it.
-   */
-  taskStatusRaw: number | null;
-
-  /** Battery percentage (siid 3 piid 1). */
-  battery: number | null;
-  /** Charging status (siid 3 piid 2). ASSUMED enum from Tasshack. */
-  charging: ChargingStatus | null;
-  /** Same as `charging` but as the raw int — useful when value is outside the assumed enum. */
-  chargingRaw: number | null;
-
-  /** Suction level (siid 4 piid 4). ASSUMED enum from Tasshack. */
-  suction: SuctionLevel | null;
-  suctionRaw: number | null;
-
-  /** Water volume (siid 4 piid 5). ASSUMED enum from Tasshack. */
-  waterVolume: WaterVolume | null;
-  waterVolumeRaw: number | null;
-
-  /**
-   * Cleaning mode (siid 4 piid 23). On r2532a returns values like 5120 that
-   * don't fit the simple Tasshack enum — likely a packed bitfield. Raw only
-   * until decoded.
-   */
-  cleaningModeRaw: number | null;
-  /** Tentative enum value — only populated when raw is in 0-3 range. */
-  cleaningMode: CleaningMode | null;
-
-  /** Current job runtime in minutes (siid 4 piid 2). ASSUMED. */
-  cleaningTimeMin: number | null;
-  /** Area cleaned this job in m² (siid 4 piid 3). ASSUMED. */
-  cleanedAreaSqm: number | null;
-  /**
-   * Task progress percentage (siid 4 piid 63), 0..100. Hits 100 at
-   * end-of-task right before the `taskComplete` event fires, then
-   * resets to 0. VERIFIED on r2532a 2026-05-03.
-   */
-  taskProgressPct: number | null;
-  /** Voice volume 0-100 (siid 7 piid 1). ASSUMED. */
-  volume: number | null;
-
-  /** Consumables — % remaining (ASSUMED siid/piid from Tasshack). */
-  mainBrushLeftPct: number | null;
-  sideBrushLeftPct: number | null;
-  filterLeftPct: number | null;
-
-  /**
-   * Whether the device is currently reachable via the cloud. Updated by
-   * MQTT connect/close events and by refresh() outcomes. `null` means
-   * unknown (haven't connected/refreshed yet).
-   */
-  online: boolean | null;
-  /**
-   * Latest OTA event seen (state + progress). `null` once the OTA settles
-   * back to `state: "idle"` or `state: "installed"`. Useful for UI progress bars.
-   */
-  ota: OtaEvent | null;
-}
-
-const EMPTY_STATE: VacuumState = {
-  miotState: null,
-  miotStateRaw: null,
-  errorCode: null,
-  taskStatusRaw: null,
-  battery: null,
-  charging: null,
-  chargingRaw: null,
-  suction: null,
-  suctionRaw: null,
-  waterVolume: null,
-  waterVolumeRaw: null,
-  cleaningModeRaw: null,
-  cleaningMode: null,
-  cleaningTimeMin: null,
-  cleanedAreaSqm: null,
-  taskProgressPct: null,
-  volume: null,
-  mainBrushLeftPct: null,
-  sideBrushLeftPct: null,
-  filterLeftPct: null,
-  online: null,
-  ota: null,
-};
+export type { VacuumState } from "./vacuum/state.js";
+export type { CleaningHistoryRecord } from "./vacuum/task-complete.js";
+export { parseTaskCompleteEvent } from "./vacuum/task-complete.js";
+export { decodeSavedMapList } from "./vacuum/saved-maps.js";
 
 /**
  * High-level wrapper around a Dreame robot vacuum.
@@ -172,50 +75,6 @@ const EMPTY_STATE: VacuumState = {
  *   shapes mirror Tasshack and `cleanSegments`'s verification covers
  *   the START_CUSTOM dispatch path.
  */
-/**
- * Per-task summary record extracted from the `event_occured siid 4
- * eiid 1` push the device fires at end-of-task.
- *
- * VERIFIED on r2532a 2026-05-03: Dreame native does NOT expose the
- * per-task fields as readable properties; they're only available
- * here as event arguments. `Vacuum` listens for the event on the
- * underlying `DreameSubscription` and emits a `'taskComplete'` event
- * with this record.
- */
-export interface CleaningHistoryRecord {
-  /** Task start time as a `Date` (parsed from unix epoch seconds). */
-  startTime: Date;
-  /** Cleaning runtime for this task in minutes. */
-  cleaningTimeMin: number;
-  /** Area cleaned during this task in square metres. */
-  cleanedAreaSqm: number;
-  /**
-   * Completion status — `true` if the device flagged the task as a
-   * clean success (`CLEAN_LOG_STATUS == 1`); `false` otherwise.
-   */
-  completed: boolean;
-  /** Final value of the device's STATUS property at task end. */
-  finalStatus: number;
-  /** Water-tank state code at task end (raw `WATER_TANK` int). */
-  waterTank: number | null;
-  /**
-   * OSS object name pointing at the per-task cleaned-area map.
-   * Format: `ali_dreame/<YYYY>/<MM>/<DD>/<uid>/<did>_<taskId>.<fwBuild>.bin`.
-   * Fetch via the existing OSS download endpoint.
-   */
-  logFileName: string | null;
-  /**
-   * Cleaning-properties JSON echoed from the original START_CUSTOM
-   * request (or the device's own scheduling defaults). Shape varies;
-   * keys observed include `cleaningTime`, `customeClean`, `mooClean`,
-   * `pet`, `cmc`, `ismultiple`, `ctyo`, `multime`. Surfaced as the
-   * raw object — consumers decode keys they care about.
-   */
-  cleaningProperties: Record<string, unknown> | null;
-  /** Raw event arguments, in case the consumer needs untouched data. */
-  raw: unknown;
-}
-
 /**
  * Outcome of `Vacuum.refresh()`. Discriminated so callers can branch on
  * `result.kind` rather than inferring online-ness from `state.online`.
@@ -919,188 +778,3 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
   }
 }
 
-// ─── property-applier table ──────────────────────────────────────────
-//
-// Each handler maps a single MIoT property push (numeric value, possibly
-// null if the device sent a non-number) to a partial state patch. The
-// `#applyChange` method looks up the right handler by `siid.piid`,
-// computes the patch, and merges it into state.
-//
-// Adding a new tracked property: add one entry here. No need to touch
-// `#applyChange`.
-
-type Patch = Partial<VacuumState>;
-type Applier = (num: number | null) => Patch;
-
-function propKey(p: { siid: number; piid: number }): string {
-  return `${p.siid}.${p.piid}`;
-}
-
-/** Narrow a raw int to an enum member, or null if it's not a known value. */
-function asEnum<T extends number>(num: number | null, enumObj: object): T | null {
-  return num !== null && num in enumObj ? (num as T) : null;
-}
-
-const APPLIERS: Record<string, Applier> = {
-  [propKey(VACUUM_PROP.STATE)]: (num) => ({
-    miotStateRaw: num,
-    miotState: asEnum<MiotState>(num, MiotState),
-  }),
-  [propKey(VACUUM_PROP.ERROR)]: (num) => ({ errorCode: num }),
-  [propKey(VACUUM_PROP.TASK_STATUS)]: (num) => ({ taskStatusRaw: num }),
-  [propKey(BATTERY_PROP.LEVEL)]: (num) => ({ battery: num }),
-  [propKey(BATTERY_PROP.CHARGING_STATUS)]: (num) => ({
-    chargingRaw: num,
-    charging: asEnum<ChargingStatus>(num, ChargingStatus),
-  }),
-  [propKey(VACUUM_PROP.SUCTION_LEVEL)]: (num) => ({
-    suctionRaw: num,
-    suction: asEnum<SuctionLevel>(num, SuctionLevel),
-  }),
-  [propKey(VACUUM_PROP.WATER_VOLUME)]: (num) => ({
-    waterVolumeRaw: num,
-    waterVolume: asEnum<WaterVolume>(num, WaterVolume),
-  }),
-  [propKey(VACUUM_PROP.CLEANING_MODE)]: (num) => ({
-    cleaningModeRaw: num,
-    cleaningMode: num !== null && num >= 0 && num <= 3 ? (num as CleaningMode) : null,
-  }),
-  [propKey(VACUUM_PROP.CLEANING_TIME)]: (num) => ({ cleaningTimeMin: num }),
-  [propKey(VACUUM_PROP.CLEANED_AREA)]: (num) => ({ cleanedAreaSqm: num }),
-  [propKey(VACUUM_PROP.TASK_PROGRESS_PCT)]: (num) => ({ taskProgressPct: num }),
-  [propKey(SETTINGS_PROP.VOLUME)]: (num) => ({ volume: num }),
-  [propKey(CONSUMABLE_PROP.MAIN_BRUSH_LEFT)]: (num) => ({ mainBrushLeftPct: num }),
-  [propKey(CONSUMABLE_PROP.SIDE_BRUSH_LEFT)]: (num) => ({ sideBrushLeftPct: num }),
-  [propKey(CONSUMABLE_PROP.FILTER_LEFT)]: (num) => ({ filterLeftPct: num }),
-};
-
-// ─── task-complete event parser ──────────────────────────────────────
-
-/**
- * Decode the `event_occured siid 4 eiid 1` payload into a typed
- * `CleaningHistoryRecord`. Returns `null` if the event doesn't carry
- * the expected per-task fields (start time and area at minimum).
- *
- * Argument layout verified live on r2532a 2026-05-03:
- *   {piid 1}  STATUS final value
- *   {piid 2}  CLEANING_TIME (minutes)
- *   {piid 3}  CLEANED_AREA (m²)
- *   {piid 6}  WATER_TANK
- *   {piid 8}  CLEANING_START_TIME (unix epoch seconds)
- *   {piid 9}  CLEAN_LOG_FILE_NAME (OSS object path)
- *   {piid 10} CLEANING_PROPERTIES (compact JSON string)
- *   {piid 13} CLEAN_LOG_STATUS (1 = success)
- */
-export function parseTaskCompleteEvent(ev: EventOccuredPush): CleaningHistoryRecord | null {
-  if (ev.siid !== 4 || ev.eiid !== 1) {
-    return null;
-  }
-  const args = new Map<number, unknown>();
-  for (const arg of ev.arguments) {
-    if (arg && typeof arg === "object" && "piid" in arg && "value" in arg) {
-      const piid = (arg as { piid: unknown }).piid;
-      if (typeof piid === "number") {
-        args.set(piid, (arg as { value: unknown }).value);
-      }
-    }
-  }
-  const startEpoch = args.get(8);
-  const cleaningTimeMin = args.get(2);
-  const cleanedAreaSqm = args.get(3);
-  if (typeof startEpoch !== "number" || typeof cleaningTimeMin !== "number" || typeof cleanedAreaSqm !== "number") {
-    return null;
-  }
-  const finalStatus = args.get(1);
-  const completedRaw = args.get(13);
-  const waterTank = args.get(6);
-  const logFileName = args.get(9);
-  const cleaningPropertiesRaw = args.get(10);
-  let cleaningProperties: Record<string, unknown> | null = null;
-  if (typeof cleaningPropertiesRaw === "string" && cleaningPropertiesRaw.length > 0) {
-    try {
-      cleaningProperties = JSON.parse(cleaningPropertiesRaw) as Record<string, unknown>;
-    } catch {
-      cleaningProperties = null;
-    }
-  }
-  return {
-    startTime: new Date(startEpoch * 1000),
-    cleaningTimeMin,
-    cleanedAreaSqm,
-    completed: completedRaw === 1,
-    finalStatus: typeof finalStatus === "number" ? finalStatus : 0,
-    waterTank: typeof waterTank === "number" ? waterTank : null,
-    logFileName: typeof logFileName === "string" ? logFileName : null,
-    cleaningProperties,
-    raw: ev.arguments,
-  };
-}
-
-// ─── saved-map list decoder ──────────────────────────────────────────
-
-interface SavedMapEntry {
-  map?: string;
-  name?: string;
-  angle?: number | string;
-}
-
-interface SavedMapWrapper {
-  mapstr?: SavedMapEntry[];
-  curr_id?: number | string;
-}
-
-/**
- * Decode the OSS-fetched saved-map list blob into a `MapSavedList`.
- * Wrapper format mirrors Tasshack `dev` `map.py:1078-1115` —
- * `{ mapstr: [{ map, name, angle }, ...], curr_id }`.
- *
- * Returns `null` if the body isn't valid JSON or doesn't have the
- * expected shape — caller can then fall back to whatever recovery
- * strategy fits (re-fetch, treat the whole blob as a single map, etc.).
- */
-export function decodeSavedMapList(bytes: Buffer): MapSavedList | null {
-  let parsed: SavedMapWrapper;
-  try {
-    parsed = JSON.parse(bytes.toString("utf8")) as SavedMapWrapper;
-  } catch {
-    return null;
-  }
-  if (!parsed.mapstr || !Array.isArray(parsed.mapstr)) {
-    return null;
-  }
-  const maps: MapSaved[] = [];
-  for (const entry of parsed.mapstr) {
-    if (!entry || typeof entry.map !== "string" || !entry.map) {
-      continue;
-    }
-    let data;
-    try {
-      data = MapDecoder.decode(entry.map);
-    } catch {
-      continue;
-    }
-    const angle =
-      typeof entry.angle === "number"
-        ? entry.angle
-        : typeof entry.angle === "string"
-          ? Number(entry.angle) || 0
-          : 0;
-    maps.push({
-      mapId: data.mapId,
-      name: typeof entry.name === "string" ? entry.name : null,
-      angle,
-      data,
-    });
-  }
-  if (maps.length === 0) {
-    return null;
-  }
-  const currId =
-    typeof parsed.curr_id === "number"
-      ? parsed.curr_id
-      : typeof parsed.curr_id === "string"
-        ? Number(parsed.curr_id)
-        : NaN;
-  const activeMapId = Number.isFinite(currId) ? currId : maps[0]!.mapId;
-  return { activeMapId, maps };
-}
