@@ -148,10 +148,14 @@ const EMPTY_STATE: VacuumState = {
  *     idle — wire correct, behaviour during an active task still
  *     untested);
  *     setSuction, setVolume (round-trip read-back confirmed).
- * - Still untested end-to-end (would actually run the robot):
- *   START, cleanSegments / cleanZones / cleanSpot, startAutoEmpty.
- *   Wire shapes mirror Tasshack and are believed correct, but not
- *   yet fired against r2532a.
+ * - cleanSegments VERIFIED on r2532a 2026-05-03 — single-segment
+ *   task accepted, robot transitioned through CleaningAlt (12) and
+ *   MopCleaning (9) before being cancelled and recovering cleanly to
+ *   ChargingComplete (13).
+ * - Still untested end-to-end (would actually run the robot for
+ *   longer): START, cleanZones / cleanSpot, startAutoEmpty. Wire
+ *   shapes mirror Tasshack and `cleanSegments`'s verification covers
+ *   the START_CUSTOM dispatch path.
  */
 /** Mode values for the START_CUSTOM action's `STATUS` in-param (siid 4 piid 1). */
 const CUSTOM_CLEAN_MODE = {
@@ -441,8 +445,13 @@ export class Vacuum extends EventEmitter {
    *
    * Throws `RangeError` if `ids` is empty.
    *
-   * ASSUMED action mapping (Tasshack `START_CUSTOM` mode 18) — NOT YET
-   * verified on r2532a (would actually run the robot).
+   * VERIFIED end-to-end on r2532a 2026-05-03 — single-segment task
+   * accepted (code 0); state transitioned `ChargingComplete (13) →
+   * CleaningAlt (12) → MopCleaning (9)` within ~10 s as the dock
+   * prepared the mop pads. `cancelCurrentJob()` cleanly returned the
+   * robot to `ChargingComplete (13)` ~30 s later. Battery untouched
+   * (the cancel landed during dock-side mop prep, before the robot
+   * actually drove).
    */
   cleanSegments(ids: number[], opts: CleanOpts = {}): Promise<unknown> {
     if (ids.length === 0) {
