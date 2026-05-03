@@ -119,6 +119,16 @@ interface SubscriptionInput {
  *
  * Call `.close()` to tear down. Closed subscriptions cannot be reopened —
  * call `client.subscribe(did)` again to make a new one.
+ *
+ * **Token refresh contract:** the access token is supplied as the MQTT
+ * `password` at CONNECT time only. The broker validates it once during the
+ * MQTT handshake and does NOT re-validate when the access token is later
+ * refreshed by the parent `DreameClient`. Existing subscriptions therefore
+ * continue to work across token refreshes; if the broker ever starts
+ * re-validating mid-session, long-running subscriptions would silently
+ * drop. We have no way to swap the password on a live `mqtt.js` client, so
+ * the recovery path would be `close()` + `client.subscribe(device)` again
+ * if/when that becomes necessary.
  */
 export class DreameSubscription extends EventEmitter {
   readonly #device: DreameDevice;
