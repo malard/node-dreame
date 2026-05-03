@@ -1,0 +1,56 @@
+name: Release
+
+# Publishes node-dreame to npm via OIDC Trusted Publishing.
+# No secrets stored — npm verifies the publish came from this exact
+# workflow in this exact repo via the GitHub OIDC token.
+#
+# Triggers on a pushed tag matching `v*.*.*`.
+#
+# Setup (one-time, on npmjs.com):
+#   1. Publish at least once manually so the package exists.
+#   2. https://www.npmjs.com/package/node-dreame/access → Trusted Publishers
+#   3. Add Publisher → GitHub Actions
+#      - Repository owner: malard
+#      - Repository name:  node-dreame
+#      - Workflow filename: release.yml
+#      - Environment: (leave blank, or "release" if you scope it)
+#   4. Save. Subsequent tag pushes publish automatically with provenance.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  id-token: write   # required for npm provenance / trusted publishing
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify version matches tag
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public
