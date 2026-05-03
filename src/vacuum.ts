@@ -217,6 +217,20 @@ export interface CleaningHistoryRecord {
 }
 
 /**
+ * Outcome of `Vacuum.refresh()`. Discriminated so callers can branch on
+ * `result.kind` rather than inferring online-ness from `state.online`.
+ *
+ * - `"online"`: cloud round-trip succeeded; `state` reflects the latest
+ *   property reads.
+ * - `"offline"`: cloud returned `80001` (device didn't ACK within the
+ *   broker timeout). `state` is the previous snapshot with `online`
+ *   forced to `false` — likely stale.
+ */
+export type RefreshResult =
+  | { kind: "online"; state: VacuumState }
+  | { kind: "offline"; state: VacuumState };
+
+/**
  * Cumulative lifetime stats from the device's totals service (siid 12).
  * Returned by `Vacuum.fetchTotals()`.
  */
@@ -297,11 +311,18 @@ export class Vacuum extends EventEmitter {
   /**
    * Pull all known properties once and update the cached state.
    *
-   * If the device is offline (cloud returns 80001), this does NOT throw —
-   * it sets `state.online = false` and returns the (likely stale) snapshot.
-   * Any other error bubbles up.
+   * Returns a `RefreshResult` discriminated by `kind`:
+   *   - `"online"` — cloud round-trip succeeded; `state` reflects the
+   *     latest property reads.
+   *   - `"offline"` — cloud returned `80001` (device didn't ACK within
+   *     the broker timeout). `state.online` is forced to `false` and
+   *     the cached property values are likely stale.
+   *
+   * Any other error (network, auth, malformed response) bubbles up
+   * rather than being collapsed into the offline outcome — those need
+   * caller attention, not a quiet retry.
    */
-  async refresh(): Promise<VacuumState> {
+  async refresh(opts: CallOptions = {}): Promise<RefreshResult> {
     const props = [
       VACUUM_PROP.STATE,
       VACUUM_PROP.ERROR,
@@ -319,8 +340,9 @@ export class Vacuum extends EventEmitter {
       CONSUMABLE_PROP.SIDE_BRUSH_LEFT,
       CONSUMABLE_PROP.FILTER_LEFT,
     ];
+    let kind: "online" | "offline" = "online";
     try {
-      const results = await this.#client.getProperties(this.device.did, props);
+      const results = await this.#client.getProperties(this.device.did, props, opts);
       for (const r of results) {
         if (r.code === 0 && r.value !== undefined) {
           this.#applyChange(r.siid, r.piid, r.value);
@@ -330,12 +352,13 @@ export class Vacuum extends EventEmitter {
     } catch (err) {
       if (err instanceof DreameDeviceOfflineError) {
         this.#setOnline(false);
+        kind = "offline";
       } else {
         throw err;
       }
     }
     this.emit("change", this.state);
-    return this.state;
+    return { kind, state: this.state };
   }
 
   /**

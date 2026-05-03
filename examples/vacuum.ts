@@ -13,8 +13,9 @@ const device = (await dreame.getDevices())[0]!;
 const vacuum = dreame.getVacuum(device);
 
 console.log(`refreshing state for ${device.name} ...`);
-const state = await vacuum.refresh();
-console.log(JSON.stringify(state, null, 2));
+const result = await vacuum.refresh();
+console.log(`refresh result: ${result.kind}`);
+console.log(JSON.stringify(result.state, null, 2));
 
 console.log("\nsubscribing to live updates...");
 await vacuum.watch();
