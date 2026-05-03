@@ -132,9 +132,7 @@ export class DreameClient {
     const devices = await listDevices({
       session,
       region: this.#ctx.region,
-      country: this.#ctx.country,
-      lang: this.#ctx.lang,
-      apiHost: this.#ctx.host,
+      ctx: this.#ctx,
     });
     this.#log("getDevices: got list", { count: devices.length });
     return devices;
@@ -184,9 +182,7 @@ export class DreameClient {
       session,
       region: this.#ctx.region,
       did,
-      country: this.#ctx.country,
-      lang: this.#ctx.lang,
-      apiHost: this.#ctx.host,
+      ctx: this.#ctx,
     };
   }
 

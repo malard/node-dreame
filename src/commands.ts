@@ -55,6 +55,12 @@ interface SendCommandInput {
    * surfaces the wrong shape as a misleading code 80001 "device offline" error).
    */
   params: unknown;
+  /**
+   * Pre-built request context. When supplied, takes precedence over the
+   * loose `country`/`lang`/`apiHost`/`fetchImpl` fields below — `DreameClient`
+   * uses this so it doesn't pay to rebuild a `RequestContext` per call.
+   */
+  ctx?: RequestContext;
   country?: string;
   lang?: string;
   apiHost?: string;
@@ -71,7 +77,7 @@ interface SendCommandInput {
  * for action calls) — see `SendCommandInput.params`.
  */
 export async function sendCommand(input: SendCommandInput): Promise<SendCommandResponse> {
-  const ctx = RequestContext.from({ ...input, host: input.apiHost });
+  const ctx = input.ctx ?? RequestContext.from({ ...input, host: input.apiHost });
   const prefix = input.iotComPrefix ?? IOT_COM_PREFIX_DREAME;
   const id = randomRequestId();
 
@@ -98,6 +104,8 @@ interface CommonInput {
   session: DreameSession;
   region: DreameRegion;
   did: string;
+  /** Pre-built request context — see `SendCommandInput.ctx`. */
+  ctx?: RequestContext;
   country?: string;
   lang?: string;
   apiHost?: string;

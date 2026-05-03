@@ -4,6 +4,8 @@ import { httpPostJsonBody, RequestContext, type BaseResponse } from "./http.js";
 export interface ListDevicesInput {
   session: DreameSession;
   region: DreameRegion;
+  /** Pre-built request context. When supplied, takes precedence over the loose host/country/lang/fetchImpl fields below. */
+  ctx?: RequestContext;
   country?: string;
   lang?: string;
   apiHost?: string;
@@ -37,7 +39,7 @@ interface RawDevice {
  * Returns one entry per bound device, including shared (non-master) devices.
  */
 export async function listDevices(input: ListDevicesInput): Promise<DreameDevice[]> {
-  const ctx = RequestContext.from({ ...input, host: input.apiHost });
+  const ctx = input.ctx ?? RequestContext.from({ ...input, host: input.apiHost });
 
   const parsed = await httpPostJsonBody<DeviceListResponse>({
     ctx,
