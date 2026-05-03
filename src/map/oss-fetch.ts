@@ -40,6 +40,10 @@ export interface OssFetchInput {
   model: string;
   /** OSS object name (`ali_dreame/<uid>/<did>/<n>`). */
   filename: string;
+  /** Caller-supplied AbortSignal — composed with the HTTP timeout. */
+  signal?: AbortSignal;
+  /** Per-request timeout override in ms. Pass `0` to disable. */
+  timeoutMs?: number;
 }
 
 export interface OssFetcherOpts {
@@ -107,6 +111,8 @@ export class OssFetcher {
         region: input.region,
       }),
       context: "oss download url",
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
     });
 
     if (typeof resp.data !== "string" || resp.data.length === 0) {
@@ -145,7 +151,10 @@ export class OssFetcher {
     const url = await this.resolveUrl(input);
     let res: Response;
     try {
-      res = await this.fetchImpl(url, { method: "GET" });
+      res = await this.fetchImpl(url, {
+        method: "GET",
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
     } catch (err) {
       throw new DreameTransportError(`oss download network error`, err);
     }

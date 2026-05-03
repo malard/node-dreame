@@ -13,6 +13,7 @@ import {
   callAction,
   getProperties,
   setProperties,
+  type CallOptions,
   type MiotAction,
   type MiotProp,
   type PropertyResult,
@@ -126,34 +127,36 @@ export class DreameClient {
   }
 
   /** List devices on the account. Auto-logs-in if needed. */
-  async getDevices(): Promise<DreameDevice[]> {
+  async getDevices(opts: CallOptions = {}): Promise<DreameDevice[]> {
     const session = await this.ensureSession();
     this.#log("getDevices: requesting list");
     const devices = await listDevices({
       session,
       region: this.#ctx.region,
       ctx: this.#ctx,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
     this.#log("getDevices: got list", { count: devices.length });
     return devices;
   }
 
   /** Read MIoT properties from a device. */
-  async getProperties(did: string, props: MiotProp[]): Promise<PropertyResult[]> {
+  async getProperties(did: string, props: MiotProp[], opts: CallOptions = {}): Promise<PropertyResult[]> {
     const session = await this.ensureSession();
-    return getProperties(this.#commonInput(did, session), props);
+    return getProperties(this.#commonInput(did, session), props, opts);
   }
 
   /** Write MIoT properties on a device. */
-  async setProperties(did: string, writes: PropertyWrite[]): Promise<PropertyResult[]> {
+  async setProperties(did: string, writes: PropertyWrite[], opts: CallOptions = {}): Promise<PropertyResult[]> {
     const session = await this.ensureSession();
-    return setProperties(this.#commonInput(did, session), writes);
+    return setProperties(this.#commonInput(did, session), writes, opts);
   }
 
   /** Invoke a MIoT action on a device. */
-  async callAction(did: string, action: MiotAction): Promise<unknown> {
+  async callAction(did: string, action: MiotAction, opts: CallOptions = {}): Promise<unknown> {
     const session = await this.ensureSession();
-    return callAction(this.#commonInput(did, session), action);
+    return callAction(this.#commonInput(did, session), action, opts);
   }
 
   /**

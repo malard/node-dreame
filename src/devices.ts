@@ -10,6 +10,10 @@ export interface ListDevicesInput {
   lang?: string;
   apiHost?: string;
   fetchImpl?: typeof fetch;
+  /** Caller-supplied AbortSignal — composed with the HTTP timeout. */
+  signal?: AbortSignal;
+  /** Per-request timeout override in ms. Pass `0` to disable. */
+  timeoutMs?: number;
 }
 
 interface DeviceListResponse extends BaseResponse {
@@ -53,6 +57,8 @@ export async function listDevices(input: ListDevicesInput): Promise<DreameDevice
       timestamp: Date.now(),
     },
     context: "device list",
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
   });
 
   const records =

@@ -16,6 +16,7 @@ export type {
   MiotAction,
   PropertyWrite,
   PropertyResult,
+  CallOptions,
 } from "./commands.js";
 export { DreameSubscription } from "./mqtt.js";
 export type {

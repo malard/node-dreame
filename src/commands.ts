@@ -67,6 +67,10 @@ interface SendCommandInput {
   /** Brand prefix in the URL (default 10000 = Dreame, 20000 = Mova). */
   iotComPrefix?: number;
   fetchImpl?: typeof fetch;
+  /** Caller-supplied AbortSignal — composed with the HTTP timeout. */
+  signal?: AbortSignal;
+  /** Per-request timeout override in ms. Pass `0` to disable. */
+  timeoutMs?: number;
 }
 
 /**
@@ -97,6 +101,8 @@ export async function sendCommand(input: SendCommandInput): Promise<SendCommandR
       },
     },
     context: input.method,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
   });
 }
 
@@ -110,15 +116,25 @@ interface CommonInput {
   lang?: string;
   apiHost?: string;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+export interface CallOptions {
+  /** Caller-supplied AbortSignal — composed with the HTTP timeout. */
+  signal?: AbortSignal;
+  /** Per-request timeout override in ms. Pass `0` to disable. */
+  timeoutMs?: number;
 }
 
 /** Read one or more MIoT properties from a device. */
 export async function getProperties(
   base: CommonInput,
   props: MiotProp[],
+  opts: CallOptions = {},
 ): Promise<PropertyResult[]> {
   const params = props.map((p) => ({ did: base.did, siid: p.siid, piid: p.piid }));
-  const res = await sendCommand({ ...base, method: "get_properties", params });
+  const res = await sendCommand({ ...base, ...opts, method: "get_properties", params });
   return extractResultArray(res, "get_properties");
 }
 
@@ -126,6 +142,7 @@ export async function getProperties(
 export async function setProperties(
   base: CommonInput,
   writes: PropertyWrite[],
+  opts: CallOptions = {},
 ): Promise<PropertyResult[]> {
   const params = writes.map((p) => ({
     did: base.did,
@@ -133,7 +150,7 @@ export async function setProperties(
     piid: p.piid,
     value: p.value,
   }));
-  const res = await sendCommand({ ...base, method: "set_properties", params });
+  const res = await sendCommand({ ...base, ...opts, method: "set_properties", params });
   return extractResultArray(res, "set_properties");
 }
 
@@ -144,14 +161,18 @@ export async function setProperties(
  * is a single object, NOT an array. Passing an array here would surface as
  * a misleading "device offline" timeout (code 80001) from the Dreame cloud.
  */
-export async function callAction(base: CommonInput, action: MiotAction): Promise<unknown> {
+export async function callAction(
+  base: CommonInput,
+  action: MiotAction,
+  opts: CallOptions = {},
+): Promise<unknown> {
   const params = {
     did: base.did,
     siid: action.siid,
     aiid: action.aiid,
     in: action.in ?? [],
   };
-  const res = await sendCommand({ ...base, method: "action", params });
+  const res = await sendCommand({ ...base, ...opts, method: "action", params });
   return res.data?.result ?? res.result ?? res;
 }
 

@@ -19,6 +19,7 @@ import {
   type OssInputBase,
 } from "./map/index.js";
 import { getCapabilities, type DeviceCapabilities } from "./capabilities.js";
+import type { CallOptions } from "./commands.js";
 import {
   BATTERY_PROP,
   CLOUD_OBJ_PROP,
@@ -602,13 +603,17 @@ export class Vacuum extends EventEmitter {
    * VERIFIED on r2532a 2026-05-03 (matched Tasshack's
    * `types.py:657-660` mapping exactly).
    */
-  async fetchTotals(): Promise<DeviceTotals> {
-    const results = await this.#client.getProperties(this.device.did, [
-      TOTALS_PROP.FIRST_CLEANING_DATE,
-      TOTALS_PROP.TOTAL_CLEANING_TIME,
-      TOTALS_PROP.CLEANING_COUNT,
-      TOTALS_PROP.TOTAL_CLEANED_AREA,
-    ]);
+  async fetchTotals(opts: CallOptions = {}): Promise<DeviceTotals> {
+    const results = await this.#client.getProperties(
+      this.device.did,
+      [
+        TOTALS_PROP.FIRST_CLEANING_DATE,
+        TOTALS_PROP.TOTAL_CLEANING_TIME,
+        TOTALS_PROP.CLEANING_COUNT,
+        TOTALS_PROP.TOTAL_CLEANED_AREA,
+      ],
+      opts,
+    );
     const lookup = (siid: number, piid: number): number | null => {
       const r = results.find((x) => x.siid === siid && x.piid === piid);
       if (!r || r.code !== 0 || typeof r.value !== "number") {
@@ -645,9 +650,9 @@ export class Vacuum extends EventEmitter {
    * VERIFIED on r2532a 2026-05-03 — uses the same `getDownloadUrl`
    * endpoint as live blobs (no separate "permanent" endpoint needed).
    */
-  async fetchTaskMap(logFileName: string): Promise<MapData> {
+  async fetchTaskMap(logFileName: string, opts: CallOptions = {}): Promise<MapData> {
     const { fetcher, base } = this.#requireOssContext("fetchTaskMap");
-    const bytes = await fetcher.fetchBlob({ ...base, filename: logFileName });
+    const bytes = await fetcher.fetchBlob({ ...base, ...opts, filename: logFileName });
     return MapDecoder.decode(bytes.toString("utf8"));
   }
 
@@ -675,10 +680,12 @@ export class Vacuum extends EventEmitter {
    * pointer yet (typical until the user does at least one cleaning
    * task that gets saved).
    */
-  async fetchSavedMapList(): Promise<MapSavedList | null> {
-    const pointerResults = await this.#client.getProperties(this.device.did, [
-      CLOUD_OBJ_PROP.POINTER_JSON,
-    ]);
+  async fetchSavedMapList(opts: CallOptions = {}): Promise<MapSavedList | null> {
+    const pointerResults = await this.#client.getProperties(
+      this.device.did,
+      [CLOUD_OBJ_PROP.POINTER_JSON],
+      opts,
+    );
     const pointer = pointerResults[0];
     if (!pointer || pointer.code !== 0 || typeof pointer.value !== "string" || !pointer.value) {
       return null;
@@ -697,7 +704,7 @@ export class Vacuum extends EventEmitter {
     }
     const objName: string = objNameRaw;
     const { fetcher, base } = this.#requireOssContext("fetchSavedMapList");
-    const bytes = await fetcher.fetchBlob({ ...base, filename: objName });
+    const bytes = await fetcher.fetchBlob({ ...base, ...opts, filename: objName });
     return decodeSavedMapList(bytes);
   }
 
