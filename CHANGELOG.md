@@ -7,15 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.2] - 2026-05-03
+## [0.1.3] - 2026-05-03
 
 Post-release code-review pass plus a Node-engine bump to current LTS.
 No new device features — all changes are internal hygiene, public-API
 refinements, and CI/CD plumbing fixes.
 
-> 0.1.1 was tagged but never reached the npm registry — the Release
-> workflow's bundled npm was too old to use OIDC Trusted Publishing
-> for the registry PUT. 0.1.2 supersedes it.
+> 0.1.1 and 0.1.2 were tagged but never reached the npm registry. 0.1.1
+> hit a 404 because the Release workflow's bundled npm was too old to
+> use OIDC Trusted Publishing for the registry PUT. 0.1.2 hit a 422
+> because `package.json` carried the wrong-case `Malard` for the GitHub
+> owner in `repository.url`/`bugs.url`/`homepage`, which npm provenance
+> verification rejects against the lowercase canonical claim from the
+> OIDC token. 0.1.3 fixes both and supersedes them.
 
 ### Breaking changes
 
@@ -47,6 +51,10 @@ refinements, and CI/CD plumbing fixes.
   latest before publish (OIDC Trusted Publishing requires npm >= 11.5.1),
   and drop the `registry-url:` setup-node parameter that was injecting
   an empty-token `.npmrc` and short-circuiting OIDC auth.
+- **`package.json` GitHub URLs lowercased.** `repository.url` /
+  `bugs.url` / `homepage` now use `malard` (the canonical lowercase
+  GitHub owner). npm provenance verification is case-sensitive against
+  the OIDC claim and rejects mismatches with `422`.
 - **CI matrix narrowed to Node 24 only** and the lint step is now part
   of the gate (was previously only enforced via `prepublishOnly`).
 - **`@types/node` bumped to `^24.0.0`** to match the engine floor.
