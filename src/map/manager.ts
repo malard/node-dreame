@@ -65,6 +65,20 @@ export interface FrameRequester {
   requestPFrame(opts: RequestPFrameOptions): Promise<unknown>;
 }
 
+/** Static fields the OssFetcher needs (host, auth, region, etc.) for one resolve call. */
+export type OssInputBase = Pick<
+  OssFetchInput,
+  "host" | "accessToken" | "region" | "country" | "lang" | "did" | "model"
+>;
+
+/**
+ * Either a static OssInputBase or a function that returns one. The function
+ * form lets the manager pick up a refreshed access token between fetches —
+ * `Vacuum.map` uses it so a long-running session stays valid across token
+ * refreshes.
+ */
+export type OssInputProvider = OssInputBase | (() => OssInputBase);
+
 export interface MapManagerOpts {
   /** Source of property pushes — emits `'properties'` with `PropertyChange[]`. */
   source: EventEmitter;
@@ -72,11 +86,11 @@ export interface MapManagerOpts {
   did: string;
   /** Shared OssFetcher (one per session is fine — its URL cache is per-instance). */
   ossFetcher: OssFetcher;
-  /** Static per-call fields the OssFetcher needs (host, auth, region, etc.). */
-  ossInput: Pick<
-    OssFetchInput,
-    "host" | "accessToken" | "region" | "country" | "lang" | "did" | "model"
-  >;
+  /**
+   * Per-call fields the OssFetcher needs. Pass an object for static values
+   * or a function for late-binding (e.g. to follow access-token refreshes).
+   */
+  ossInput: OssInputProvider;
   /** Active-pull abstraction. Use `clientFrameRequester(client, did)` for the production wiring. */
   frameRequester: FrameRequester;
   /** Pending-queue size after which we ask the device to re-send the missing P-frame. Default 4. */
@@ -102,7 +116,7 @@ export class MapManager extends EventEmitter {
   readonly #source: EventEmitter;
   readonly #did: string;
   readonly #ossFetcher: OssFetcher;
-  readonly #ossInput: MapManagerOpts["ossInput"];
+  readonly #ossInput: OssInputProvider;
   readonly #frameRequester: FrameRequester;
   readonly #recoverGap: number;
   readonly #pendingMax: number;
@@ -248,8 +262,10 @@ export class MapManager extends EventEmitter {
     this.#lastIFrameObjName = objName;
     let bytes: Buffer;
     try {
+      const baseInput =
+        typeof this.#ossInput === "function" ? this.#ossInput() : this.#ossInput;
       bytes = await this.#ossFetcher.fetchBlob({
-        ...this.#ossInput,
+        ...baseInput,
         filename: objName,
       });
     } catch (err) {

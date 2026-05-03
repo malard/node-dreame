@@ -1,9 +1,10 @@
 # Live Map — Roadmap
 
-> **Status:** Phases 0-4 done. The decoder, merge, OSS fetcher, and the
-> `MapManager` state machine are all shipped and unit-tested. Phase 5
-> (lazy `DreameDevice.map` getter + `package.json` `exports` field for
-> the `node-dreame/map` sub-import) is the next deliverable.
+> **Status:** Phases 0-5 done. The decoder, merge, OSS fetcher,
+> `MapManager` state machine, lazy `Vacuum.map` getter, and
+> `node-dreame/map` sub-export are all shipped and unit-tested. The
+> public API is feature-complete for v1; remaining work (browser
+> rendering, multi-floor, VSLAM) is out of scope for this lib.
 > Source of binary-format truth is
 > [`Tasshack/dreame-vacuum`](https://github.com/Tasshack/dreame-vacuum)
 > on the **`dev` branch** (commit `bba1d35`, v2.0.0b23) — specifically
@@ -624,42 +625,45 @@ stale drop, recovery thresholds, map_id mismatch, OSS pointer ingest,
 duplicate-PATH dedupe, fetch-error retry, irrelevant-push filtering,
 start/stop/reset.
 
-### Phase 5 — Public API & sub-export (~1 hour) — NEXT
+### Phase 5 — Public API & sub-export — DONE (2026-05-03)
 
-`src/map/index.ts` already re-exports the decoder, merge helpers,
-request helpers, `OssFetcher`, `MapManager`, and `clientFrameRequester`.
-What's still missing for Phase 5:
+Five things landed:
 
-1. **`package.json` `exports` field** — add the sub-import path so
-   consumers can `import { MapManager } from "node-dreame/map"`. The
-   build (`tsup`) needs a corresponding entry to emit
-   `dist/map/index.{js,cjs,d.ts}`.
+1. **`package.json` `exports` field + tsup entry** — consumers can
+   `import { MapManager } from "node-dreame/map"`. tsup emits the
+   sub-entry to `dist/map/index.{js,cjs,d.ts}` (with a shared
+   `dist/client-<hash>.d.ts` chunk for the cross-referenced `DreameClient`
+   type). Both files ship via `package.json#files: ["dist"]`.
 
-   ```json
-   {
-     "exports": {
-       ".": {
-         "types": "./dist/index.d.ts",
-         "import": "./dist/index.js",
-         "require": "./dist/index.cjs"
-       },
-       "./map": {
-         "types": "./dist/map/index.d.ts",
-         "import": "./dist/map/index.js",
-         "require": "./dist/map/index.cjs"
-       }
-     }
-   }
-   ```
+2. **Lazy `Vacuum.map` getter** — landed on `Vacuum`, not `DreameDevice`
+   (the latter is a plain data interface; `Vacuum` already owns the
+   client + subscription lifecycle). The getter:
+   - Throws `DreameTransportError` if accessed before `watch()` — the
+     manager has no source of property pushes without an open
+     subscription.
+   - Lazily constructs and `.start()`s a `MapManager` on first access,
+     bound to the current subscription.
+   - Memoises — repeat access returns the same instance.
+   - Wired through `unwatch()` / next `watch()` so a fresh subscription
+     gets a fresh manager (the old one is `.stop()`/`.reset()`-ed).
+   - Plumbs a per-`Vacuum` `OssFetcher` and passes ossInput as a
+     *function* so the access token follows `client.session` refreshes
+     between fetches.
 
-2. **Lazy `device.map` getter** — open question whether this lives on
-   `DreameDevice` or `Vacuum`. Lazily constructs a `MapManager` from a
-   `DreameClient` + an opened `DreameSubscription`, so users who don't
-   access `.map` don't pay the dependency cost. Should auto-call
-   `.start()` on first access (or expose explicit start/stop).
+3. **`MapManager.ossInput` accepts a function** — additive change. Tests
+   pass static input, the live wiring passes
+   `(): OssInputBase => ({ host, accessToken: client.session!.accessToken, ... })`
+   so a long-running session stays valid across token refreshes.
+   `OssInputBase` and `OssInputProvider` are exported from `node-dreame/map`.
 
-3. **README + a usage example** under `examples/live-map-stream.ts` so
-   the public surface has a working reference.
+4. **`examples/live-map-stream.ts`** — minimal end-to-end consumer that
+   logs in, watches, attaches to `vacuum.map`, and prints one line per
+   decoded `MapData`. Use it as the smoke test for any future change to
+   `Vacuum.map` / `MapManager` against a real device.
+
+5. **`DreameClient` exposes `apiHost`/`country`/`lang`** — readonly
+   getters off the internal `RequestContext`. Required for the lazy
+   getter to build `OssFetchInput` without reaching into private state.
 
 ### Phase 6 — Browser rendering (out of scope for this lib)
 

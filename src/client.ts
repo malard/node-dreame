@@ -53,6 +53,21 @@ export class DreameClient {
     return this.#ctx.region;
   }
 
+  /** Resolved API host (`<region>.iot.dreame.tech:13267` by default). */
+  get apiHost(): string {
+    return this.#ctx.host;
+  }
+
+  /** Resolved country header value (ISO-3166 alpha-2). */
+  get country(): string {
+    return this.#ctx.country;
+  }
+
+  /** Resolved language header value (ISO-639-1). */
+  get lang(): string {
+    return this.#ctx.lang;
+  }
+
   get session(): DreameSession | null {
     return this.#session;
   }

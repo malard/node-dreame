@@ -31,7 +31,12 @@ export { OssFetcher } from "./oss-fetch.js";
 export type { OssFetchInput, OssFetcherOpts } from "./oss-fetch.js";
 
 export { MapManager, clientFrameRequester } from "./manager.js";
-export type { MapManagerOpts, FrameRequester } from "./manager.js";
+export type {
+  MapManagerOpts,
+  FrameRequester,
+  OssInputBase,
+  OssInputProvider,
+} from "./manager.js";
 
 export type {
   MapData,

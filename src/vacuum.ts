@@ -2,7 +2,13 @@ import { EventEmitter } from "node:events";
 import type { DreameClient } from "./client.js";
 import type { DreameDevice } from "./types.js";
 import type { DreameSubscription, OtaEvent, PropertyChange } from "./mqtt.js";
-import { DreameDeviceOfflineError } from "./errors.js";
+import { DreameDeviceOfflineError, DreameTransportError } from "./errors.js";
+import {
+  MapManager,
+  OssFetcher,
+  clientFrameRequester,
+  type OssInputBase,
+} from "./map/index.js";
 import {
   BATTERY_PROP,
   CONSUMABLE_PROP,
@@ -137,6 +143,8 @@ export class Vacuum extends EventEmitter {
   readonly #client: DreameClient;
   #state: VacuumState = { ...EMPTY_STATE };
   #subscription: DreameSubscription | null = null;
+  #mapManager: MapManager | null = null;
+  #ossFetcher: OssFetcher | null = null;
 
   constructor(client: DreameClient, device: DreameDevice) {
     super();
@@ -235,11 +243,74 @@ export class Vacuum extends EventEmitter {
   }
 
   async unwatch(): Promise<void> {
+    if (this.#mapManager) {
+      this.#mapManager.stop();
+      this.#mapManager.reset();
+      this.#mapManager = null;
+    }
     const sub = this.#subscription;
     this.#subscription = null;
     if (sub) {
       await sub.close();
     }
+  }
+
+  /**
+   * Live-map state machine for this device. Lazy: the underlying
+   * `MapManager` is constructed on first access and bound to the
+   * current MQTT subscription, so users who don't render maps don't
+   * pay the dependency cost of decoding them.
+   *
+   * Requires `watch()` to have been called — without an open
+   * subscription there's no source of property pushes to attach to.
+   * Throws `DreameTransportError` otherwise.
+   *
+   * Listen on the returned manager:
+   * ```ts
+   * await vacuum.watch();
+   * vacuum.map.on("map", (data) => render(data));
+   * vacuum.map.on("error", (err) => console.error(err));
+   * ```
+   *
+   * The manager auto-starts on first access; `unwatch()` stops it and
+   * discards state. A subsequent `watch()` + `vacuum.map` access
+   * returns a fresh manager bound to the new subscription.
+   */
+  get map(): MapManager {
+    if (!this.#subscription) {
+      throw new DreameTransportError("vacuum.map requires watch() to have been called first");
+    }
+    if (this.#mapManager) {
+      return this.#mapManager;
+    }
+    if (!this.#ossFetcher) {
+      this.#ossFetcher = new OssFetcher();
+    }
+    const client = this.#client;
+    const device = this.device;
+    this.#mapManager = new MapManager({
+      source: this.#subscription,
+      did: device.did,
+      ossFetcher: this.#ossFetcher,
+      ossInput: (): OssInputBase => {
+        const session = client.session;
+        if (!session) {
+          throw new DreameTransportError("vacuum.map: no active session for OSS fetch");
+        }
+        return {
+          host: client.apiHost,
+          accessToken: session.accessToken,
+          region: client.region,
+          country: client.country,
+          lang: client.lang,
+          did: device.did,
+          model: device.model,
+        };
+      },
+      frameRequester: clientFrameRequester(client, device.did),
+    });
+    this.#mapManager.start();
+    return this.#mapManager;
   }
 
   // ─── commands ──────────────────────────────────────────────────────
