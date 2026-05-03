@@ -65,6 +65,30 @@ against real hardware versus inherited from upstream sources.
 - **Saved-map list fetch.** `vacuum.fetchSavedMapList()` reads the
   `MAP_LIST` pointer (siid 6 piid 8), fetches the OSS blob, and
   returns the list of stored floors plus the active map id.
+- **Lifetime totals.** `vacuum.fetchTotals()` returns
+  `{firstCleaningDate, totalCleaningMinutes, cleaningCount,
+  totalCleanedAreaSqm}` from the device's cumulative-totals service
+  (siid 12).
+- **MIoT event-bus parsing.** `DreameSubscription` now emits an
+  `'event'` event for every `event_occured` push (Dreame's typo).
+  Catches the per-task summary push (`siid 4 eiid 1`) plus generic
+  status-changed events.
+- **Per-task history records.** `vacuum.on('taskComplete', cb)`
+  emits a typed `CleaningHistoryRecord` (`startTime`,
+  `cleaningTimeMin`, `cleanedAreaSqm`, `completed`, `logFileName`,
+  `cleaningProperties`) decoded from the MIoT event-bus push the
+  device fires at end-of-task.
+- **Per-task historical maps.** `vacuum.fetchTaskMap(logFileName)`
+  fetches the per-task `.bin` from OSS and decodes it into a
+  `MapData` with the full cleaning path embedded in `paths`, the
+  cleaned/dirty overlay in `cleanedArea`, and the same room layout
+  in `layers`/`segments`.
+- **Task progress percentage.** `VacuumState.taskProgressPct`
+  exposes the device's own 0..100 progress for an active cleaning
+  task (siid 4 piid 63), suitable as a progress bar source.
+- **Reference web bridges.** `examples/server-sse.ts` (zero-deps SSE)
+  and `examples/server-websocket.ts` (bidirectional `ws`) showing how
+  to forward `MapData` / `VacuumState` / events to a browser client.
 - **Typed errors.** `DreameAuthError`, `DreameApiError`,
   `DreameDeviceOfflineError`, `DreameTransportError`.
 
