@@ -57,13 +57,22 @@ export interface OtaEvent {
 /**
  * MIoT event push (`method: "event_occured"`, with the typo) — the
  * MIoT-defined event-bus channel for things that aren't property
- * changes. Emitted alongside `properties` pushes during real device
- * activity (verified live on r2532a 2026-05-03 — `siid 4 eiid 4` and
- * `siid 2 eiid 2` both observed during a cleaning task).
+ * changes. Verified live on r2532a 2026-05-03 — three distinct events
+ * observed during a cleaning task:
  *
- * The MIoT spec defines event names per `siid`/`eiid` pair, but
- * Dreame doesn't publish a public catalogue. `arguments` is forwarded
- * as-is — usually an empty array for status-changed events.
+ *   - `siid 2 eiid 2` — generic "status changed" (no arguments)
+ *   - `siid 4 eiid 3` — "task ended" (no arguments)
+ *   - `siid 4 eiid 4` — generic vacuum-service event (no arguments)
+ *   - **`siid 4 eiid 1` — TASK SUMMARY** — fires at end-of-task with
+ *     the full per-task record packed into `arguments`. This is the
+ *     primary mechanism Dreame native uses to expose cleaning history
+ *     (the per-task piids are NOT readable as properties on r2532a;
+ *     they only surface here). Argument piids include 2 (cleaning
+ *     time), 3 (cleaned area), 8 (start time), 9 (per-task map
+ *     filename), 10 (cleaning-properties JSON), 13 (success status).
+ *
+ * Subscribe via `DreameSubscription.on('event', cb)` to capture all
+ * four. Filter by `siid`/`eiid` to discriminate.
  */
 export interface EventOccuredPush {
   did: string;

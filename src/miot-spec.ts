@@ -113,33 +113,38 @@ export const VACUUM_PROP = {
    */
   STEP_INDICATOR: { siid: 4, piid: 7 } as const,
   /**
-   * ASSUMED Tasshack `types.py:579` — supposed unix-epoch start time
-   * for the *current* cleaning task.
-   *
-   * **NOT PRESENT on r2532a** — verified 2026-05-03 by reading siid 4
-   * piid 8 *during an active cleaning task*: response code = -1
-   * (property does not exist). Modern Dreame must surface per-task
-   * timing differently (likely via a cloud REST endpoint we haven't
-   * mapped). Kept here purely for cross-reference with Tasshack's
-   * older-Dreame mapping. Do not rely on this for r2532a.
+   * VERIFIED 2026-05-03 — unix-epoch start time of the most-recent
+   * cleaning task. **Not readable as a property** (returns code = -1
+   * even mid-task), but **emitted as an argument of the
+   * `event_occured siid 4 eiid 1` "task summary" event** at end-of-
+   * task. Subscribe to `DreameSubscription.on('event', ...)` to capture.
    */
   CLEANING_START_TIME: { siid: 4, piid: 8 } as const,
   /**
-   * ASSUMED Tasshack `types.py:580` — log filename for the most-recent
-   * task.
+   * VERIFIED 2026-05-03 — per-task cleaned-area map filename. Same
+   * delivery as `CLEANING_START_TIME` — emitted as an argument of the
+   * `event_occured siid 4 eiid 1` event, not readable as a property.
    *
-   * **NOT PRESENT on r2532a** — verified 2026-05-03 by reading siid 4
-   * piid 9 mid-task: code = -1. The Mi-cloud history fetch flow this
-   * field belongs to doesn't apply to Dreame native. Same caveat as
-   * `CLEANING_START_TIME` above.
+   * Path format: `ali_dreame/<YYYY>/<MM>/<DD>/<uid>/<did>_<taskId>.<fwBuild>.bin`
+   * e.g. `ali_dreame/2026/05/03/KB968216/660622937_144940446.2199.bin`.
+   *
+   * Fetch via the existing OSS download endpoint to retrieve the
+   * per-task cleaned-area map blob.
    */
   CLEAN_LOG_FILE_NAME: { siid: 4, piid: 9 } as const,
   /**
-   * ASSUMED Tasshack `types.py:585` — completion bool for the most-
-   * recent task.
+   * Per-call parameters echoed back at task end — same JSON-string
+   * shape as the START_CUSTOM in-param. Emitted in
+   * `event_occured siid 4 eiid 1`. Useful to discriminate which
+   * cleaning mode produced this task summary.
    *
-   * **NOT PRESENT on r2532a** — verified 2026-05-03, code = -1. Same
-   * caveat as `CLEANING_START_TIME` above.
+   * Fields observed (greasy-area task on r2532a 2026-05-03):
+   *   `{cleaningTime, customeClean, mooClean, pet, cmc, ismultiple, ctyo, multime}`
+   */
+  CLEANING_PROPERTIES: { siid: 4, piid: 10 } as const,
+  /**
+   * VERIFIED 2026-05-03 — task completion status (1 = success).
+   * Same delivery as `CLEANING_START_TIME` — emitted as event arg.
    */
   CLEAN_LOG_STATUS: { siid: 4, piid: 13 } as const,
   /**
