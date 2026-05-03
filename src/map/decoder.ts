@@ -28,6 +28,7 @@
 import * as zlib from "node:zlib";
 import { createDecipheriv, createHash } from "node:crypto";
 import type {
+  MapCleanedAreaOverlay,
   MapData,
   MapDecodeOptions,
   MapDimensions,
@@ -37,8 +38,10 @@ import type {
   MapPath,
   MapPathType,
   MapPose,
+  MapRestrictedArea,
   MapRun,
   MapSegment,
+  MapVirtualWall,
 } from "./types.js";
 import { mergePFrame, mergePFrameEnvelope } from "./merge.js";
 
@@ -78,6 +81,9 @@ export class MapDecoder {
     const segments = canDecodePixels ? collectSegments(layers, dimensions, tail) : [];
     const paths = parsePathTr(tail.tr ?? "");
     const obstacles = parseObstacles(tail.ai_obstacle ?? []);
+    const { virtualWalls, restrictedAreas } = parseVirtualWalls(tail.vw);
+    const cleanedArea =
+      typeof tail.decmap === "string" ? parseCleanedAreaOverlay(tail.decmap) : null;
 
     return {
       mapId: header.mapId,
@@ -93,6 +99,9 @@ export class MapDecoder {
       segments,
       paths,
       obstacles,
+      virtualWalls,
+      restrictedAreas,
+      cleanedArea,
     };
   }
 
@@ -282,6 +291,30 @@ export interface MapTail {
   ai_obstacle?: unknown[][];
   /** Optional `fsm` flag — `1` means frame-map mode (path B decoder). */
   fsm?: number;
+  /**
+   * Cleaned-area overlay as a base64-encoded recursive map blob. See
+   * `parseCleanedAreaOverlay` for the inner shape (header + zlib +
+   * inner JSON tail with `CleanArea`).
+   */
+  decmap?: string;
+  /**
+   * User-defined geometry block — virtual walls, no-go zones, no-mop
+   * zones, and explicit carpet add/remove markers. All inner arrays
+   * carry mm in the world frame. See `parseVirtualWalls`.
+   *
+   * Wire format (Tasshack `dev` `map.py:4656-4669`):
+   *   `{ line: [[x0,y0,x1,y1], ...],
+   *      rect: [[x0,y0,x1,y1, angle?], ...],
+   *      mop:  [[x0,y0,x1,y1, angle?], ...],
+   *      addcpt: [...], nocpt: [...] }`
+   */
+  vw?: {
+    line?: number[][];
+    rect?: number[][];
+    mop?: number[][];
+    addcpt?: unknown[];
+    nocpt?: unknown[];
+  };
   [key: string]: unknown;
 }
 
@@ -654,6 +687,222 @@ export function parseObstacles(raw: unknown[]): MapObstacle[] {
     });
   }
   return out;
+}
+
+/**
+ * Parse the `vw` block — Dreame's user-defined geometry. Tasshack
+ * `dev` `map.py:4597-4669` is the canonical reference; we mirror its
+ * shape interpretations:
+ *
+ *   - `vw.line`: array of `[x0,y0,x1,y1]` line segments — each is a
+ *     single virtual wall, NOT a polyline.
+ *   - `vw.rect`: array of `[x0,y0,x1,y1, angle?]` axis-aligned no-go
+ *     rectangles. Tasshack sorts the corners; we do the same so the
+ *     bbox is well-formed regardless of which order the wire used.
+ *   - `vw.mop`: same shape as `vw.rect` but for no-mop zones.
+ *
+ * `addcpt` / `nocpt` (carpet add/remove markers) are intentionally
+ * skipped — the carpet pixel layer already comes from the pixel grid
+ * via `decodePixelGridFsm1`'s low-bits-11 path; the wire format for
+ * the explicit add/remove markers hasn't been observed live yet.
+ *
+ * Returns empty arrays when `vw` is absent or empty — there's no
+ * meaningful difference between "no virtual walls configured" and
+ * "this frame doesn't carry the field" at the public-API layer, and
+ * the merge layer handles the latter via fallback.
+ */
+export function parseVirtualWalls(
+  vw: { line?: number[][]; rect?: number[][]; mop?: number[][] } | undefined,
+): { virtualWalls: MapVirtualWall[]; restrictedAreas: MapRestrictedArea[] } {
+  if (!vw) {
+    return { virtualWalls: [], restrictedAreas: [] };
+  }
+
+  const virtualWalls: MapVirtualWall[] = [];
+  for (const line of vw.line ?? []) {
+    if (!Array.isArray(line) || line.length < 4) {
+      continue;
+    }
+    const x0 = parseFloatField(line[0]);
+    const y0 = parseFloatField(line[1]);
+    const x1 = parseFloatField(line[2]);
+    const y1 = parseFloatField(line[3]);
+    if (x0 === null || y0 === null || x1 === null || y1 === null) {
+      continue;
+    }
+    virtualWalls.push({
+      from: { x: x0, y: y0 },
+      to: { x: x1, y: y1 },
+    });
+  }
+
+  const restrictedAreas: MapRestrictedArea[] = [];
+  for (const rect of vw.rect ?? []) {
+    const area = parseRestrictedArea("noGo", rect);
+    if (area) {
+      restrictedAreas.push(area);
+    }
+  }
+  for (const rect of vw.mop ?? []) {
+    const area = parseRestrictedArea("noMop", rect);
+    if (area) {
+      restrictedAreas.push(area);
+    }
+  }
+
+  return { virtualWalls, restrictedAreas };
+}
+
+/**
+ * Decode the `decmap` recursive blob into a `MapCleanedAreaOverlay`.
+ *
+ * `decmap` is a full inner map envelope (URL-safe base64 → zlib →
+ * 27-byte header + width*height pixels + JSON tail) embedded inside
+ * the parent's JSON tail. Tasshack reference: `dev` `map.py:5162-5233`.
+ *
+ * Inner pixel encoding uses only the low 2 bits (`& 0x03`):
+ *   - `1` → cleaned
+ *   - `2` → dirty
+ *   - `0` (or `3`) → ignored
+ *
+ * Returns `null` for any decode failure — the parent decode should
+ * never abort because of a malformed inner blob.
+ */
+export function parseCleanedAreaOverlay(decmap: string): MapCleanedAreaOverlay | null {
+  if (!decmap) {
+    return null;
+  }
+  let inflated: Buffer;
+  try {
+    inflated = unwrapEnvelope(decmap);
+  } catch {
+    return null;
+  }
+  if (inflated.length < HEADER_SIZE) {
+    return null;
+  }
+  let header;
+  try {
+    header = parseMapHeader(inflated);
+  } catch {
+    return null;
+  }
+  const pixelStart = HEADER_SIZE;
+  const pixelEnd = pixelStart + header.width * header.height;
+  if (inflated.length < pixelEnd || header.width <= 0 || header.height <= 0) {
+    return null;
+  }
+  const pixels = inflated.subarray(pixelStart, pixelEnd);
+  const { cleaned, dirty } = decodeCleanedAreaPixels(pixels, header.width, header.height);
+
+  const overlay: MapCleanedAreaOverlay = {
+    dimensions: {
+      left: header.left,
+      top: header.top,
+      width: header.width,
+      height: header.height,
+      gridSize: header.gridSize,
+    },
+    cleaned,
+    dirty,
+  };
+
+  // Pull out CleanArea from the inner JSON tail when present — opaque
+  // to us, useful for downstream stats.
+  if (inflated.length > pixelEnd) {
+    const tailText = inflated.subarray(pixelEnd).toString("utf8");
+    if (tailText) {
+      try {
+        const innerTail = JSON.parse(tailText) as { CleanArea?: unknown };
+        if (innerTail.CleanArea !== undefined) {
+          overlay.cleanedSegments = innerTail.CleanArea;
+        }
+      } catch {
+        // Inner tail malformed — keep the pixel decoding, drop the stats.
+      }
+    }
+  }
+
+  return overlay;
+}
+
+function decodeCleanedAreaPixels(
+  pixels: Buffer,
+  width: number,
+  height: number,
+): { cleaned: MapRun[]; dirty: MapRun[] } {
+  const cleaned: MapRun[] = [];
+  const dirty: MapRun[] = [];
+  for (let y = 0; y < height; y++) {
+    let cleanStart = -1;
+    let dirtyStart = -1;
+    const rowOff = y * width;
+    for (let x = 0; x < width; x++) {
+      const v = pixels[rowOff + x]! & 0x03;
+      if (v === 1) {
+        if (dirtyStart >= 0) {
+          dirty.push([dirtyStart, y, x - dirtyStart]);
+          dirtyStart = -1;
+        }
+        if (cleanStart < 0) {
+          cleanStart = x;
+        }
+      } else if (v === 2) {
+        if (cleanStart >= 0) {
+          cleaned.push([cleanStart, y, x - cleanStart]);
+          cleanStart = -1;
+        }
+        if (dirtyStart < 0) {
+          dirtyStart = x;
+        }
+      } else {
+        if (cleanStart >= 0) {
+          cleaned.push([cleanStart, y, x - cleanStart]);
+          cleanStart = -1;
+        }
+        if (dirtyStart >= 0) {
+          dirty.push([dirtyStart, y, x - dirtyStart]);
+          dirtyStart = -1;
+        }
+      }
+    }
+    if (cleanStart >= 0) {
+      cleaned.push([cleanStart, y, width - cleanStart]);
+    }
+    if (dirtyStart >= 0) {
+      dirty.push([dirtyStart, y, width - dirtyStart]);
+    }
+  }
+  return { cleaned, dirty };
+}
+
+function parseRestrictedArea(
+  kind: "noGo" | "noMop",
+  raw: unknown,
+): MapRestrictedArea | null {
+  if (!Array.isArray(raw) || raw.length < 4) {
+    return null;
+  }
+  const a = parseFloatField(raw[0]);
+  const b = parseFloatField(raw[1]);
+  const c = parseFloatField(raw[2]);
+  const d = parseFloatField(raw[3]);
+  if (a === null || b === null || c === null || d === null) {
+    return null;
+  }
+  const xMin = Math.min(a, c);
+  const xMax = Math.max(a, c);
+  const yMin = Math.min(b, d);
+  const yMax = Math.max(b, d);
+  const area: MapRestrictedArea = {
+    kind,
+    bbox: { xMin, yMin, xMax, yMax },
+  };
+  const e = raw.length > 4 ? parseFloatField(raw[4]) : null;
+  if (e !== null) {
+    area.angle = e;
+  }
+  return area;
 }
 
 function parseFloatField(v: unknown): number | null {

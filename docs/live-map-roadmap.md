@@ -680,6 +680,114 @@ A consumer rendering `MapData` in the browser would typically:
 
 Not part of this roadmap beyond ensuring the JSON shape is browser-friendly.
 
+## v2 — node-dreame work to make dunbar-os a thin client (2026-05-03)
+
+dunbar-os is a separate web interface that consumes this lib. The
+boundary node-dreame holds: anything that needs Dreame protocol or
+device-spec knowledge. dunbar-os holds presentation (canvas/SVG,
+coordinate transforms to screen pixels, palettes, i18n labels, app
+auth, persistence).
+
+In priority order — each is shippable independently:
+
+### 1. Device capability record per model — DONE (2026-05-03)
+
+Shipped as `src/capabilities.ts` exporting `DeviceCapabilities`,
+`getCapabilities(model)`, and the curated `MODEL_CAPABILITIES` table.
+`vacuum.capabilities` lazily resolves the record for the active
+device. The r2532a entry is verified against firmware 4.3.9_2199;
+unknown models get a conservative fallback with `verified: false`.
+
+Add new models by appending to `MODEL_CAPABILITIES` after confirming
+each flag against real hardware.
+
+### 2. Semantic action helpers
+
+`Vacuum` currently exposes raw siid/piid actions. dunbar-os shouldn't
+have to know the byte-level shape. Add intent-level methods:
+
+- `vacuum.cleanSegments(ids: number[], opts?)` — resolves segment IDs
+  to the device's `room_clean` action shape.
+- `vacuum.goHome()` — dock action with the right action params.
+- `vacuum.setSuction(level: SuctionLevel)` — already exists; verify
+  for r2532a.
+- `vacuum.cancelCurrentJob()` — STOP with the right preconditions.
+- `vacuum.spotClean(point: { x, y })` — point-clean action.
+- `vacuum.setNoGoZones(rects)` (later — paired with vw decode).
+
+These are the "abilities" surface — what dunbar-os calls when the
+user clicks a button. They centralise the "which siid/piid/aiid
+combination expresses this intent on this model" knowledge.
+
+### 3. `vw.line` / `vw.rect` decode (read-only first)
+
+Surface virtual walls and no-go rectangles in `MapData`:
+
+```ts
+interface MapData {
+  // ...
+  virtualWalls: Array<{ from: MapPoint; to: MapPoint }>;
+  noGoZones: Array<{ x0: number; y0: number; x1: number; y1: number }>;
+}
+```
+
+Decode-only is small. Editing is much bigger (a separate action shape
+plus a write path) and lives in #4 below.
+
+### 4. Saved-map list (ASSUMED) + multi-floor MapManager refactor (BLOCKED)
+
+**`Vacuum.fetchSavedMapList()`** — shipped. Reads `siid 6 piid 8`
+(`MAP_LIST` / `POINTER_JSON`), fetches the OSS blob via the existing
+`getDownloadUrl` endpoint, and parses the wrapper as
+`{ mapstr: [{ map, name?, angle? }, ...], curr_id }` per Tasshack's
+Mi-cloud reference. The wrapper key names are **ASSUMED** to match on
+Dreame native — verify by running `examples/probe-saved-maps.ts` on a
+real device. If the format differs, update
+`src/vacuum.ts:decodeSavedMapList`.
+
+**Multi-floor MapManager refactor** — BLOCKED until we have:
+1. A live capture of the device announcing a floor switch (does it
+   bump `mapId` mid-stream? push a separate property? require a
+   refetch?).
+2. A verified saved-map list endpoint payload to confirm the wrapper
+   shape.
+
+Without both, the refactor would be speculation. Today the manager
+resets state and requests a fresh I-frame on `mapId` mismatch — fine
+for single-floor homes, lossy for multi-floor. Re-open when dunbar-os
+actually exercises floor-switching.
+
+### 5. `decmap` cleaned-area overlay decode
+
+Decode the `decmap` recursive-blob field in the JSON tail into a
+parallel `MapData.cleanedArea` layer (run-length encoded the same way
+other layers are). Lets dunbar-os shade "what's been cleaned this
+session" over the floor plan.
+
+Lower priority — useful but not blocking.
+
+### 6. Editing virtual walls / no-go zones (later)
+
+Add write-side helpers paired with #3:
+- `vacuum.setVirtualWalls(walls)` / `addVirtualWall(wall)`
+- `vacuum.setNoGoZones(rects)` / `addNoGoZone(rect)`
+
+Needs the action shape figured out from a live capture against a real
+edit. Defer until dunbar-os is ready to expose the editor UI.
+
+## Out of scope for node-dreame — dunbar-os territory
+
+To make the boundary explicit:
+- Browser rendering (Canvas / SVG).
+- Coordinate transform mm → screen pixels, viewport math, Y-flip.
+- Theming / palettes / segment colour assignment.
+- i18n of enum labels (e.g. "MiotState 13" → "Charging Complete").
+- Pan / zoom / click UX.
+- Persistence of last-known map for offline render.
+- App-side auth (who can see this vacuum, multi-user access).
+- WebSocket / SSE wire protocol from server to browser. node-dreame
+  emits events; dunbar-os decides how to forward them.
+
 ## Open questions / things the executor must decide
 
 1. ~~**AES IV source on Dreamehome cloud.**~~ **RESOLVED for `MAP_DATA`
@@ -751,5 +859,17 @@ During each phase:
 
 After v1:
 
-- [ ] Sanitization pass on fixtures so they can be committed.
+- [x] Sanitization pass on fixtures so they can be committed.
+  **Decision (2026-05-03): deferred — not committing real-house captures.**
+  The decoded JSON tail and pixel grid embed personal home geometry,
+  segment names, and obstacle photo paths. Tests already
+  `describe.skip` gracefully when fixtures are absent, so there's no
+  CI cost. Stale captures from the Phase 0 / Phase 2 sessions were
+  archived to
+  `C:\Development\node-dreame-research\map-fixtures-archive\original-captures-2026-05-02\`
+  (see README there); only the test-referenced subset remains under
+  `test/fixtures/map/` (still gitignored).
+  Re-open this if/when a generic / sterile capture (e.g. a mocked
+  test layout with no real obstacles or rooms) becomes available —
+  that one *can* be committed.
 - [ ] Decide v2 priorities with user.

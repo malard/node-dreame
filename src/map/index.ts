@@ -19,6 +19,8 @@ export {
   decodePixelGridFsm1,
   parsePathTr,
   parseObstacles,
+  parseVirtualWalls,
+  parseCleanedAreaOverlay,
 } from "./decoder.js";
 export type { MapHeader, MapTail, RawSegInf, PixelClass } from "./decoder.js";
 
@@ -53,4 +55,9 @@ export type {
   MapPathType,
   MapObstacle,
   MapFrameType,
+  MapVirtualWall,
+  MapRestrictedArea,
+  MapCleanedAreaOverlay,
+  MapSaved,
+  MapSavedList,
 } from "./types.js";

@@ -24,6 +24,7 @@ import {
   MapDecodeError,
   HEADER_SIZE,
   ANGLE_ABSENT,
+  FRAME_TYPE,
   unwrapEnvelope,
   parseMapHeader,
   parseMapJsonTail,
@@ -31,6 +32,8 @@ import {
   decodePixelGridFsm1,
   parsePathTr,
   parseObstacles,
+  parseVirtualWalls,
+  parseCleanedAreaOverlay,
 } from "../src/map/index.js";
 
 const FIXTURE_DIR = path.resolve("test/fixtures/map");
@@ -249,6 +252,188 @@ describe("parseObstacles", () => {
   });
 });
 
+// ─── parseVirtualWalls ──────────────────────────────────────────────
+
+describe("parseVirtualWalls", () => {
+  it("returns empty arrays for an absent vw block", () => {
+    const out = parseVirtualWalls(undefined);
+    expect(out.virtualWalls).toEqual([]);
+    expect(out.restrictedAreas).toEqual([]);
+  });
+
+  it("parses line segments as { from, to } pairs in raw mm", () => {
+    const out = parseVirtualWalls({
+      line: [
+        [-1000, 2000, -1000, 3500],
+        [500, 800, 1500, 800],
+      ],
+    });
+    expect(out.virtualWalls).toEqual([
+      { from: { x: -1000, y: 2000 }, to: { x: -1000, y: 3500 } },
+      { from: { x: 500, y: 800 }, to: { x: 1500, y: 800 } },
+    ]);
+    expect(out.restrictedAreas).toEqual([]);
+  });
+
+  it("parses no-go rects as axis-aligned bboxes (corners sorted)", () => {
+    const out = parseVirtualWalls({
+      rect: [[3000, 5000, 1000, 2000]], // intentionally unsorted corners
+    });
+    expect(out.restrictedAreas).toEqual([
+      {
+        kind: "noGo",
+        bbox: { xMin: 1000, yMin: 2000, xMax: 3000, yMax: 5000 },
+      },
+    ]);
+  });
+
+  it("captures the optional 5th element as `angle`", () => {
+    const out = parseVirtualWalls({
+      rect: [[0, 0, 100, 100, 45]],
+    });
+    expect(out.restrictedAreas).toHaveLength(1);
+    expect(out.restrictedAreas[0]!.angle).toBe(45);
+  });
+
+  it("tags vw.mop entries with kind=noMop", () => {
+    const out = parseVirtualWalls({
+      rect: [[0, 0, 100, 100]],
+      mop: [[200, 200, 400, 400]],
+    });
+    expect(out.restrictedAreas.map((a) => a.kind)).toEqual(["noGo", "noMop"]);
+  });
+
+  it("accepts string-typed numbers (Dreame ships some fields as strings)", () => {
+    const out = parseVirtualWalls({
+      line: [["100", "200", "300", "400"] as unknown as number[]],
+    });
+    expect(out.virtualWalls).toEqual([
+      { from: { x: 100, y: 200 }, to: { x: 300, y: 400 } },
+    ]);
+  });
+
+  it("skips malformed entries silently", () => {
+    const out = parseVirtualWalls({
+      line: [
+        [1, 2, 3], // too short
+        ["a", "b", "c", "d"], // non-numeric
+        [1, 2, 3, 4],
+      ],
+      rect: [
+        [], // empty
+        [10, 20, 30, 40], // good
+      ],
+    });
+    expect(out.virtualWalls).toHaveLength(1);
+    expect(out.restrictedAreas).toHaveLength(1);
+  });
+});
+
+// ─── parseCleanedAreaOverlay ────────────────────────────────────────
+
+function buildDecmapEnvelope(opts: {
+  width: number;
+  height: number;
+  pixels: number[];
+  left?: number;
+  top?: number;
+  gridSize?: number;
+  innerTail?: Record<string, unknown>;
+}): string {
+  const header = Buffer.alloc(HEADER_SIZE);
+  header.writeInt16LE(1, 0);
+  header.writeInt16LE(0, 2);
+  header[4] = FRAME_TYPE.I;
+  header.writeInt16LE(opts.gridSize ?? 50, 17);
+  header.writeInt16LE(opts.width, 19);
+  header.writeInt16LE(opts.height, 21);
+  header.writeInt16LE(opts.left ?? 0, 23);
+  header.writeInt16LE(opts.top ?? 0, 25);
+  const pixels = Buffer.from(opts.pixels);
+  const tail = Buffer.from(JSON.stringify(opts.innerTail ?? {}), "utf8");
+  return zlib.deflateSync(Buffer.concat([header, pixels, tail])).toString("base64");
+}
+
+describe("parseCleanedAreaOverlay", () => {
+  it("returns null for empty input", () => {
+    expect(parseCleanedAreaOverlay("")).toBeNull();
+  });
+
+  it("returns null for malformed envelope", () => {
+    expect(parseCleanedAreaOverlay("@@not-base64@@")).toBeNull();
+  });
+
+  it("decodes inner dimensions from the embedded blob's header", () => {
+    const env = buildDecmapEnvelope({
+      width: 4,
+      height: 3,
+      pixels: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      left: -1000,
+      top: 500,
+      gridSize: 50,
+    });
+    const out = parseCleanedAreaOverlay(env);
+    expect(out).not.toBeNull();
+    expect(out!.dimensions).toEqual({
+      left: -1000,
+      top: 500,
+      width: 4,
+      height: 3,
+      gridSize: 50,
+    });
+    expect(out!.cleaned).toEqual([]);
+    expect(out!.dirty).toEqual([]);
+  });
+
+  it("classifies pixels by their low 2 bits (1=cleaned, 2=dirty)", () => {
+    // Row 0: [cleaned, cleaned, dirty, 0]
+    // Row 1: [dirty, cleaned, dirty, dirty]
+    // High bits are mixed in to verify only low 2 are used.
+    const env = buildDecmapEnvelope({
+      width: 4,
+      height: 2,
+      pixels: [
+        0xfd, 0x05, 0xfe, 0x00, // 0xfd & 3 = 1, 0x05 & 3 = 1, 0xfe & 3 = 2, 0
+        0xf2, 0xf1, 0x06, 0x06, // 2, 1, 2, 2
+      ],
+    });
+    const out = parseCleanedAreaOverlay(env)!;
+    // Cleaned runs: [0,0,2] (cols 0-1 row 0), [1,1,1] (col 1 row 1)
+    expect(out.cleaned).toEqual([
+      [0, 0, 2],
+      [1, 1, 1],
+    ]);
+    // Dirty runs: [2,0,1] (col 2 row 0), [0,1,1] (col 0 row 1), [2,1,2] (cols 2-3 row 1)
+    expect(out.dirty).toEqual([
+      [2, 0, 1],
+      [0, 1, 1],
+      [2, 1, 2],
+    ]);
+  });
+
+  it("captures the inner tail's CleanArea field as cleanedSegments", () => {
+    const env = buildDecmapEnvelope({
+      width: 1,
+      height: 1,
+      pixels: [1],
+      innerTail: { CleanArea: { "1": 12.5, "2": 8.3 } },
+    });
+    const out = parseCleanedAreaOverlay(env)!;
+    expect(out.cleanedSegments).toEqual({ "1": 12.5, "2": 8.3 });
+  });
+
+  it("omits cleanedSegments when CleanArea is absent", () => {
+    const env = buildDecmapEnvelope({
+      width: 1,
+      height: 1,
+      pixels: [1],
+      innerTail: { other: "stuff" },
+    });
+    const out = parseCleanedAreaOverlay(env)!;
+    expect(out.cleanedSegments).toBeUndefined();
+  });
+});
+
 // ─── real fixture round-trip ─────────────────────────────────────────
 
 describeReal("real fixture: 001-piid1 (r2532a P-frame, map_id=3, frame_id=584)", () => {
@@ -290,6 +475,11 @@ describeReal("real fixture: 001-piid1 (r2532a P-frame, map_id=3, frame_id=584)",
     expect(md.mapId).toBe(3);
     expect(md.frameId).toBe(584);
     expect(md.frameType).toBe("P");
+    // No virtual walls / no-go zones configured on this device.
+    expect(md.virtualWalls).toEqual([]);
+    expect(md.restrictedAreas).toEqual([]);
+    // No decmap on idle live-stream P-frames.
+    expect(md.cleanedArea).toBeNull();
     expect(md.dimensions).toEqual({
       left: -7200,
       top: 2450,

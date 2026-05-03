@@ -125,9 +125,94 @@ export interface MapObstacle {
 }
 
 /**
- * The decoded map. v1 surface area: walls + segments + robot pose + dock
- * + cleaning path + obstacles. v2 (no-go zones, virtual walls, multi-floor,
- * cleaned-area overlay) lives outside this interface and will extend it.
+ * One user-defined virtual wall — a line segment the robot won't cross.
+ * Both endpoints are in mm, world-frame.
+ */
+export interface MapVirtualWall {
+  from: MapPoint;
+  to: MapPoint;
+}
+
+/**
+ * One axis-aligned restricted area — either a no-go zone (`vw.rect`,
+ * `kind: "noGo"`) or a no-mop zone (`vw.mop`, `kind: "noMop"`).
+ *
+ * The wire format carries only two opposing corners; this struct
+ * normalises them into a `MapBoundingBox`. The optional `angle`
+ * mirrors a fifth element Dreame sometimes appends (rotation hint —
+ * the rectangle itself remains axis-aligned in the wire format).
+ */
+export interface MapRestrictedArea {
+  kind: "noGo" | "noMop";
+  bbox: MapBoundingBox;
+  /** Optional rotation hint from the wire format — degrees, may be undefined. */
+  angle?: number;
+}
+
+/**
+ * One saved map (floor) as returned by `Vacuum.fetchSavedMapList()`.
+ *
+ * `data` is the fully-decoded `MapData` for the saved map's binary
+ * blob — same shape as live frames, but with `frameType: "I"` since
+ * saved maps are always full snapshots.
+ */
+export interface MapSaved {
+  mapId: number;
+  /** Custom user-given name (from the wrapper JSON), if any. */
+  name: string | null;
+  /** Rotation in degrees (from the wrapper JSON's `angle` field). */
+  angle: number;
+  /** Decoded map content. */
+  data: MapData;
+}
+
+/**
+ * Result of `Vacuum.fetchSavedMapList()` — all stored maps for the
+ * device plus a pointer to the currently-active one.
+ *
+ * On a single-floor home the list will have exactly one entry whose
+ * `mapId` matches `activeMapId`.
+ */
+export interface MapSavedList {
+  /** `mapId` of the currently-active floor (the one the robot is on). */
+  activeMapId: number;
+  /** All stored maps. Order matches the wire wrapper. */
+  maps: MapSaved[];
+}
+
+/**
+ * Cleaned-area overlay decoded from the JSON tail's `decmap` field.
+ *
+ * `decmap` is a recursive blob — a full inner map envelope (header +
+ * zlib + JSON tail) embedded as a base64 string in the parent tail.
+ * Its pixel grid uses only the low 2 bits (`& 0x03`): `1 = cleaned`,
+ * `2 = dirty`. The inner grid has its own dimensions, independent of
+ * the parent map; the renderer reprojects onto the parent's pixel
+ * grid using the dimensions below.
+ *
+ * Both `cleaned` and `dirty` are run-length encoded the same way as
+ * `MapLayer.runs` — `[xPixel, yPixel, length]` in the inner grid's
+ * pixel-space.
+ *
+ * `cleanedSegments` carries the inner tail's `CleanArea` field when
+ * present (per-segment cleaned-area stats). Shape varies per firmware
+ * so it's surfaced as opaque.
+ */
+export interface MapCleanedAreaOverlay {
+  /** Inner blob's own dimensions — independent of the parent map's. */
+  dimensions: MapDimensions;
+  /** Pixels marked `cleaned` (low-bits == 1) in the inner grid. */
+  cleaned: MapRun[];
+  /** Pixels marked `dirty` (low-bits == 2) in the inner grid. */
+  dirty: MapRun[];
+  /** Optional per-segment cleaned-area stats from the inner JSON tail. */
+  cleanedSegments?: unknown;
+}
+
+/**
+ * The decoded map. Coordinates throughout are mm in the device's world
+ * frame. The renderer transforms once when projecting onto its own
+ * canvas — see `dimensions` for the parent grid origin / scale.
  */
 export interface MapData {
   // ── Identity ──────────────────────────────────────────────────────
@@ -158,6 +243,21 @@ export interface MapData {
 
   // ── AI-detected obstacles ────────────────────────────────────────
   obstacles: MapObstacle[];
+
+  // ── User-defined geometry (from JSON tail's `vw`) ────────────────
+  /** Line-segment virtual walls. Empty array when none configured. */
+  virtualWalls: MapVirtualWall[];
+  /** Axis-aligned restricted areas — both no-go (`vw.rect`) and no-mop (`vw.mop`). */
+  restrictedAreas: MapRestrictedArea[];
+
+  // ── Cleaned-area overlay (from JSON tail's `decmap`) ─────────────
+  /**
+   * Cleaning progress map embedded in the parent frame, decoded from
+   * the recursive `decmap` blob. `null` when the parent didn't carry
+   * one (typical for live-stream frames; the device emits `decmap`
+   * mainly on full-snapshot pushes).
+   */
+  cleanedArea: MapCleanedAreaOverlay | null;
 }
 
 /**

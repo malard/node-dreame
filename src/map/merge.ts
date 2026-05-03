@@ -237,6 +237,18 @@ function mergeTails(
   if (!("sa" in p) && "sa" in prev) {
     merged.sa = prev.sa;
   }
+  // Virtual walls / no-go / no-mop geometry is configuration, not live
+  // state — most P-frames don't re-send it. Fall back to prev when
+  // absent so the running state retains user-defined zones.
+  if (!("vw" in p) && "vw" in prev) {
+    merged.vw = prev.vw;
+  }
+  // decmap is the cleaning-progress snapshot — re-emitted only on full
+  // updates, not every P-frame. Fall back to prev when absent so the
+  // running state retains the cleaned-area overlay between snapshots.
+  if (!("decmap" in p) && "decmap" in prev) {
+    merged.decmap = prev.decmap;
+  }
   return merged;
 }
 

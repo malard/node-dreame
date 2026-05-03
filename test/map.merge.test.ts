@@ -420,6 +420,81 @@ describe("mergePFrame: JSON tail", () => {
     expect(h.left).toBe(0);
     expect(h.top).toBe(0);
   });
+
+  it("falls back to prev's vw when P doesn't carry one", () => {
+    const prev = buildFrame({
+      frameId: 5,
+      frameType: "I",
+      width: 1,
+      height: 1,
+      left: 0,
+      top: 0,
+      tail: { vw: { line: [[0, 0, 100, 0]] } },
+    });
+    const p = buildFrame({
+      frameId: 6,
+      frameType: "P",
+      width: 0,
+      height: 0,
+      left: 0,
+      top: 0,
+      tail: { timestamp_ms: 99 },
+    });
+    const merged = mergePFrame(prev, p);
+    const h = parseMapHeader(merged);
+    const tail = parseMapJsonTail(sliceTailText(merged, h));
+    expect(tail.vw).toEqual({ line: [[0, 0, 100, 0]] });
+  });
+
+  it("uses P's vw when present (overrides prev)", () => {
+    const prev = buildFrame({
+      frameId: 5,
+      frameType: "I",
+      width: 1,
+      height: 1,
+      left: 0,
+      top: 0,
+      tail: { vw: { line: [[0, 0, 100, 0]] } },
+    });
+    const p = buildFrame({
+      frameId: 6,
+      frameType: "P",
+      width: 0,
+      height: 0,
+      left: 0,
+      top: 0,
+      tail: { vw: { rect: [[200, 200, 400, 400]] } },
+    });
+    const merged = mergePFrame(prev, p);
+    const h = parseMapHeader(merged);
+    const tail = parseMapJsonTail(sliceTailText(merged, h));
+    expect(tail.vw).toEqual({ rect: [[200, 200, 400, 400]] });
+  });
+
+  it("falls back to prev's decmap when P doesn't carry one", () => {
+    const prev = buildFrame({
+      frameId: 5,
+      frameType: "I",
+      width: 1,
+      height: 1,
+      left: 0,
+      top: 0,
+      tail: { decmap: "PAYLOAD-A" },
+    });
+    const p = buildFrame({
+      frameId: 6,
+      frameType: "P",
+      width: 0,
+      height: 0,
+      left: 0,
+      top: 0,
+      tail: {},
+    });
+    const merged = mergePFrame(prev, p);
+    const h = parseMapHeader(merged);
+    const tail = parseMapJsonTail(sliceTailText(merged, h));
+    expect(tail.decmap).toBe("PAYLOAD-A");
+  });
 });
 
 // ─── Real fixture chain ─────────────────────────────────────────────

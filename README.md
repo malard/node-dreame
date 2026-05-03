@@ -45,11 +45,15 @@ const dreame = new DreameClient({
 await dreame.login();
 
 const devices = await dreame.getDevices();
-console.log(devices);
+const vacuum = dreame.getVacuum(devices[0]);
 
-const robot = devices[0];
-await robot.start();
-await robot.dock();
+// Inspect what the hardware supports before rendering UI / building requests:
+if (vacuum.capabilities.canMop) {
+  console.log("Mop supported. Water levels:", vacuum.capabilities.supportedWaterVolumes);
+}
+
+await vacuum.refresh();
+await vacuum.locate();
 ```
 
 CommonJS:
@@ -57,6 +61,32 @@ CommonJS:
 ```js
 const { DreameClient } = require("node-dreame");
 ```
+
+## Building a web app on top of node-dreame
+
+node-dreame runs in a Node.js process and emits events. If you want a
+browser front-end (e.g. a live map UI), put a thin bridge between
+node-dreame and your browser. Two reference adapters live in
+`examples/`, both ~120 lines, copy-and-adapt:
+
+- [`examples/server-sse.ts`](./examples/server-sse.ts) — zero-deps
+  Server-Sent Events stream + `POST /actions/<name>`. Simplest. Use
+  when one-way live updates plus discrete commands is enough.
+- [`examples/server-websocket.ts`](./examples/server-websocket.ts) —
+  bidirectional WebSocket using [`ws`](https://www.npmjs.com/package/ws).
+  Use when the browser needs to push back frequently (action invocations,
+  cursor positions, etc.).
+
+Both forward `vacuum.map`, `vacuum.on('change')`, and `vacuum.on('ota')`
+to all connected clients with a tagged `{ type, data }` envelope.
+
+Live map streaming on its own (no server) is in
+[`examples/live-map-stream.ts`](./examples/live-map-stream.ts).
+
+The map shape (`MapData`) is documented in
+[`docs/live-map-roadmap.md`](./docs/live-map-roadmap.md). Coordinates
+are raw mm in the device's world frame — the browser does the
+viewport transform.
 
 ## Supported devices
 

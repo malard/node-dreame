@@ -4,13 +4,18 @@ import type { DreameDevice } from "./types.js";
 import type { DreameSubscription, OtaEvent, PropertyChange } from "./mqtt.js";
 import { DreameDeviceOfflineError, DreameTransportError } from "./errors.js";
 import {
+  MapDecoder,
   MapManager,
   OssFetcher,
   clientFrameRequester,
+  type MapSaved,
+  type MapSavedList,
   type OssInputBase,
 } from "./map/index.js";
+import { getCapabilities, type DeviceCapabilities } from "./capabilities.js";
 import {
   BATTERY_PROP,
+  CLOUD_OBJ_PROP,
   CONSUMABLE_PROP,
   CleaningMode,
   ChargingStatus,
@@ -138,6 +143,31 @@ const EMPTY_STATE: VacuumState = {
  * setters are wired but NOT YET exercised against this hardware — they use
  * Tasshack's standard mappings which work on older Dreames.
  */
+/** Mode values for the START_CUSTOM action's `STATUS` in-param (siid 4 piid 1). */
+const CUSTOM_CLEAN_MODE = {
+  SEGMENT: 18,
+  ZONE: 19,
+  SPOT: 20,
+} as const;
+
+/**
+ * Common knobs for the segment / zone / spot cleaning helpers.
+ * Defaults are picked from the cached `state.suctionRaw` /
+ * `state.waterVolumeRaw` when present, falling back to Standard / Medium.
+ */
+export interface CleanOpts {
+  /** Number of cleaning passes per target. Clamped to >= 1. Default 1. */
+  repeats?: number;
+  /** Suction level int (typically 0=Quiet, 1=Standard, 2=Intense, 3=Max). */
+  fan?: number;
+  /**
+   * Water/mop level int. On self-wash docks (e.g. r2532a) the value
+   * space may be a 1-32 humidity scale rather than the 1-3 enum — pass
+   * through verbatim.
+   */
+  water?: number;
+}
+
 export class Vacuum extends EventEmitter {
   readonly device: DreameDevice;
   readonly #client: DreameClient;
@@ -145,6 +175,7 @@ export class Vacuum extends EventEmitter {
   #subscription: DreameSubscription | null = null;
   #mapManager: MapManager | null = null;
   #ossFetcher: OssFetcher | null = null;
+  #capabilities: DeviceCapabilities | null = null;
 
   constructor(client: DreameClient, device: DreameDevice) {
     super();
@@ -155,6 +186,24 @@ export class Vacuum extends EventEmitter {
   /** Last-known device state. */
   get state(): VacuumState {
     return { ...this.#state };
+  }
+
+  /**
+   * Capabilities of this device's model — what the hardware supports
+   * (mop, auto-empty, multi-floor, etc.) and which suction/water/etc.
+   * values are accepted. Resolved from the model identifier on first
+   * access and cached.
+   *
+   * For unknown models the returned record has `verified: false` and
+   * conservative defaults (most hardware flags `false`); consumers
+   * should branch on `verified` if they need to distinguish "feature
+   * is absent" from "feature might be present, we don't know".
+   */
+  get capabilities(): DeviceCapabilities {
+    if (!this.#capabilities) {
+      this.#capabilities = getCapabilities(this.device.model);
+    }
+    return this.#capabilities;
   }
 
   /**
@@ -350,6 +399,158 @@ export class Vacuum extends EventEmitter {
     return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.START_AUTO_EMPTY, in: [] });
   }
 
+  // ─── semantic action helpers ──────────────────────────────────────
+  //
+  // Higher-level wrappers around START_CUSTOM (siid 4 aiid 1) — the
+  // single device action that handles segment-, zone-, and spot-mode
+  // cleaning, dispatched by a mode int on piid 1 plus a JSON payload
+  // on piid 10. Tasshack reference: `dev` `device.py:4530-4787`. The
+  // trailing `1` in each segment select is the "order" field — must
+  // be 1 on r2532a (5th-gen); other values break the action there.
+
+  /**
+   * Start cleaning the named segments (rooms) in order. Each segment
+   * id corresponds to a `MapSegment.id` from the live map.
+   *
+   * Defaults: 1 pass, current suction/water from cached state, falling
+   * back to Standard suction / Medium water if state is unset.
+   *
+   * Throws `RangeError` if `ids` is empty.
+   *
+   * ASSUMED action mapping (Tasshack `START_CUSTOM` mode 18) — NOT YET
+   * verified on r2532a (would actually run the robot).
+   */
+  cleanSegments(ids: number[], opts: CleanOpts = {}): Promise<unknown> {
+    if (ids.length === 0) {
+      throw new RangeError("cleanSegments: ids must not be empty");
+    }
+    const { repeats, fan, water } = this.#resolveCleanOpts(opts);
+    const selects = ids.map((id) => [id, repeats, fan, water, 1]);
+    return this.#startCustom(CUSTOM_CLEAN_MODE.SEGMENT, { selects });
+  }
+
+  /**
+   * Clean one or more axis-aligned zones. Each zone is `(x0, y0)` →
+   * `(x1, y1)` in the same mm world-frame as `MapData`. Coordinates
+   * are rounded to integers before being sent (the device expects ints).
+   *
+   * ASSUMED action mapping (Tasshack `START_CUSTOM` mode 19) — NOT YET
+   * verified on r2532a.
+   */
+  cleanZones(
+    zones: Array<{ x0: number; y0: number; x1: number; y1: number }>,
+    opts: CleanOpts = {},
+  ): Promise<unknown> {
+    if (zones.length === 0) {
+      throw new RangeError("cleanZones: zones must not be empty");
+    }
+    const { repeats, fan, water } = this.#resolveCleanOpts(opts);
+    const areas = zones.map((z) => [
+      Math.round(z.x0),
+      Math.round(z.y0),
+      Math.round(z.x1),
+      Math.round(z.y1),
+      repeats,
+      fan,
+      water,
+    ]);
+    return this.#startCustom(CUSTOM_CLEAN_MODE.ZONE, { areas });
+  }
+
+  /**
+   * Clean a small area around a single point — Tasshack notes ~1.5 m².
+   * Coordinates in mm world-frame, rounded to integers before send.
+   *
+   * ASSUMED action mapping (Tasshack `START_CUSTOM` mode 20) — NOT YET
+   * verified on r2532a.
+   */
+  cleanSpot(point: { x: number; y: number }, opts: CleanOpts = {}): Promise<unknown> {
+    const { repeats, fan, water } = this.#resolveCleanOpts(opts);
+    const points = [[Math.round(point.x), Math.round(point.y), repeats, fan, water]];
+    return this.#startCustom(CUSTOM_CLEAN_MODE.SPOT, { points });
+  }
+
+  /** Resume a paused cleaning job. Same wire call as `start()`. */
+  resume(): Promise<unknown> {
+    return this.start();
+  }
+
+  /** Stop the current job (e.g. user pressed cancel). Same wire call as `stop()`. */
+  cancelCurrentJob(): Promise<unknown> {
+    return this.stop();
+  }
+
+  /** Send the robot back to its dock. Same wire call as `dock()`. */
+  goHome(): Promise<unknown> {
+    return this.dock();
+  }
+
+  // ─── saved maps ────────────────────────────────────────────────────
+
+  /**
+   * Fetch the device's saved-map list (all stored floors plus a
+   * pointer to the currently-active one).
+   *
+   * Reads the OSS pointer from `siid 6 piid 8` (`MAP_LIST` /
+   * `POINTER_JSON`) — a JSON `{obj_name, md5}` — fetches the OSS blob
+   * via `OssFetcher`, parses the wrapper JSON, and decodes each
+   * inner saved-map blob via `MapDecoder`.
+   *
+   * **Wire-format ASSUMED** from Tasshack's Mi-cloud reference
+   * (`dev` `map.py:1078-1115`):
+   *   `{ mapstr: [{ map: "<base64>", name?, angle? }, ...], curr_id: <id> }`
+   *
+   * Verify against the live Dreame native cloud by running
+   * `examples/probe-saved-maps.ts` and comparing — the wrapper key
+   * names (`mapstr`, `curr_id`) and the inner `map`/`name`/`angle`
+   * fields may differ on the Dreame side.
+   *
+   * Resolves to `null` when the device hasn't published a `MAP_LIST`
+   * pointer yet (typical until the user does at least one cleaning
+   * task that gets saved).
+   */
+  async fetchSavedMapList(): Promise<MapSavedList | null> {
+    const pointerResults = await this.#client.getProperties(this.device.did, [
+      CLOUD_OBJ_PROP.POINTER_JSON,
+    ]);
+    const pointer = pointerResults[0];
+    if (!pointer || pointer.code !== 0 || typeof pointer.value !== "string" || !pointer.value) {
+      return null;
+    }
+    let parsed: { obj_name?: unknown };
+    try {
+      parsed = JSON.parse(pointer.value) as { obj_name?: unknown };
+    } catch {
+      return null;
+    }
+    const objName = parsed.obj_name;
+    if (typeof objName !== "string" || !objName) {
+      return null;
+    }
+
+    if (!this.#ossFetcher) {
+      this.#ossFetcher = new OssFetcher();
+    }
+    const session = this.#client.session;
+    if (!session) {
+      throw new DreameTransportError(
+        "fetchSavedMapList: no active session — call .login() first",
+      );
+    }
+    const bytes = await this.#ossFetcher.fetchBlob({
+      host: this.#client.apiHost,
+      accessToken: session.accessToken,
+      region: this.#client.region,
+      country: this.#client.country,
+      lang: this.#client.lang,
+      did: this.device.did,
+      model: this.device.model,
+      filename: objName,
+    });
+
+    return decodeSavedMapList(bytes);
+  }
+
   // ─── settings ──────────────────────────────────────────────────────
 
   /** ASSUMED enum — NOT YET verified end-to-end on r2532a. */
@@ -424,6 +625,30 @@ export class Vacuum extends EventEmitter {
   }
 
   // ─── internals ─────────────────────────────────────────────────────
+
+  /** Resolve `CleanOpts` → concrete (repeats, fan, water) ints with state-aware defaults. */
+  #resolveCleanOpts(opts: CleanOpts): { repeats: number; fan: number; water: number } {
+    const repeats = Math.max(1, Math.trunc(opts.repeats ?? 1));
+    const fan = opts.fan ?? this.#state.suctionRaw ?? 1;
+    const water = opts.water ?? this.#state.waterVolumeRaw ?? 2;
+    return { repeats, fan, water };
+  }
+
+  /**
+   * Dispatch the START_CUSTOM action with the given mode + payload object.
+   * The payload is JSON-stringified (compact, no spaces) per Tasshack's
+   * `device.py:4321` convention — the device parses the string itself.
+   */
+  #startCustom(mode: number, payload: Record<string, unknown>): Promise<unknown> {
+    const json = JSON.stringify(payload);
+    return this.#client.callAction(this.device.did, {
+      ...VACUUM_ACTION.START_CUSTOM,
+      in: [
+        { piid: 1, value: mode },
+        { piid: 10, value: json },
+      ],
+    });
+  }
 
   #setOnline(online: boolean): void {
     if (this.#state.online === online) {
@@ -508,3 +733,72 @@ const APPLIERS: Record<string, Applier> = {
   [propKey(CONSUMABLE_PROP.SIDE_BRUSH_LEFT)]: (num) => ({ sideBrushLeftPct: num }),
   [propKey(CONSUMABLE_PROP.FILTER_LEFT)]: (num) => ({ filterLeftPct: num }),
 };
+
+// ─── saved-map list decoder ──────────────────────────────────────────
+
+interface SavedMapEntry {
+  map?: string;
+  name?: string;
+  angle?: number | string;
+}
+
+interface SavedMapWrapper {
+  mapstr?: SavedMapEntry[];
+  curr_id?: number | string;
+}
+
+/**
+ * Decode the OSS-fetched saved-map list blob into a `MapSavedList`.
+ * Wrapper format mirrors Tasshack `dev` `map.py:1078-1115` —
+ * `{ mapstr: [{ map, name, angle }, ...], curr_id }`.
+ *
+ * Returns `null` if the body isn't valid JSON or doesn't have the
+ * expected shape — caller can then fall back to whatever recovery
+ * strategy fits (re-fetch, treat the whole blob as a single map, etc.).
+ */
+export function decodeSavedMapList(bytes: Buffer): MapSavedList | null {
+  let parsed: SavedMapWrapper;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8")) as SavedMapWrapper;
+  } catch {
+    return null;
+  }
+  if (!parsed.mapstr || !Array.isArray(parsed.mapstr)) {
+    return null;
+  }
+  const maps: MapSaved[] = [];
+  for (const entry of parsed.mapstr) {
+    if (!entry || typeof entry.map !== "string" || !entry.map) {
+      continue;
+    }
+    let data;
+    try {
+      data = MapDecoder.decode(entry.map);
+    } catch {
+      continue;
+    }
+    const angle =
+      typeof entry.angle === "number"
+        ? entry.angle
+        : typeof entry.angle === "string"
+          ? Number(entry.angle) || 0
+          : 0;
+    maps.push({
+      mapId: data.mapId,
+      name: typeof entry.name === "string" ? entry.name : null,
+      angle,
+      data,
+    });
+  }
+  if (maps.length === 0) {
+    return null;
+  }
+  const currId =
+    typeof parsed.curr_id === "number"
+      ? parsed.curr_id
+      : typeof parsed.curr_id === "string"
+        ? Number(parsed.curr_id)
+        : NaN;
+  const activeMapId = Number.isFinite(currId) ? currId : maps[0]!.mapId;
+  return { activeMapId, maps };
+}

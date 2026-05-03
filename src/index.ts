@@ -63,3 +63,8 @@ export type {
   FeatureConfigKey,
   FeatureConfigEntry,
 } from "./miot-spec.js";
+export {
+  getCapabilities,
+  MODEL_CAPABILITIES,
+} from "./capabilities.js";
+export type { DeviceCapabilities } from "./capabilities.js";
