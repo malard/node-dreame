@@ -7,30 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Initial scaffold.
-- Dreame native cloud OAuth2 password-grant auth + token refresh.
-- Device discovery via `/dreame-user-iot/iotuserbind/device/listV2`.
-- HTTP `sendCommand` transport with typed helpers: `getProperties`, `setProperties`, `callAction`. Action dispatch correctly uses object-shaped `params` (Dreame's MIoT action call differs from property calls in this respect — cost us a debugging session).
-- MQTT live subscription per device with typed events: `properties` (MIoT siid/piid changes), `props` (untyped k/v on `method:"props"`, used for OTA), `info` (typed `_otc.info` with wifi/network/firmware), `ota` (convenience for ota_state + ota_progress).
-- High-level `Vacuum` wrapper: cached typed state, `refresh()`, `watch()`/`unwatch()`, `start/pause/stop/dock/locate/clearWarning/startAutoEmpty` methods, suction/water/cleaningMode/volume setters.
-- `MiotState` enum sourced from r2532a's own translated keyDefine v8 (39 values); transitions verified live during an OTA.
-- `DreameDeviceOfflineError` for cloud code 80001 (device offline / timeout); `Vacuum.refresh()` updates `state.online: false` instead of throwing.
-- `state.ota` field — latest `OtaEvent` snapshot, cleared when OTA settles.
-- Verification annotations throughout `miot-spec.ts` — every entry tagged VERIFIED `<date>` or ASSUMED `<source>`.
-- Newly-discovered properties: firmware build (siid 1.4), serial (siid 1.5 / 4.14), timezone (siid 8.1), DND config JSON (siid 3.3), feature toggles JSON (siid 4.50, ~36 named toggles), versions JSON (siid 99.31 — fw_ver/mcu_ver/speech_ver), AI models JSON (siid 99.94), cloud-object pointer (siid 6.8).
-- Long-running event logger (`examples/log-events.ts`) for capturing raw envelopes + version transitions over time.
-- `SCHEDULE_PROP` block (siid 8) — cleaning schedule lives in a single dash-delimited string at piid 2. Format VERIFIED + documented (9 fields including weekday bitmap, recurring flag, room-scope, mop wetness, mode-dependent config block, room list).
-- `WASHBOARD_PROP` block — live state during a dock washboard-cleaning cycle. `COUNTDOWN_SECS` (siid 4 piid 61) ticks at 1Hz from the device, so the app's countdown is true device feedback (not a UI estimate).
-- `ScheduleRoute` enum — Standard/Intensive/Deep/Quick (bits 0-3 of the Custom-mode packed int).
-- `ScheduleCleaningMode` enum — VacOnly/VacAndMop/MopOnly/MopAfterVac (bits 4-6).
-- `SCHEDULE_FIELD8` constants — bit-position table for the Custom-mode packed integer (route / mode / suction / cycle count).
-- `MiotState.CleanWashboardBase = 30` upgraded from keyDefine-only to direct observation.
-- `SuctionLevel` enum names corrected to match the r2532a UI: Quiet/Standard/**Intense**/**Max** (Tasshack's Strong/Turbo were older-model labels for the same numeric values 2/3).
-- Second session pass — cleaning-behaviour properties verified: `RESUME_CLEANING` (4.11), `CARPET_BOOST` (4.12), `AI_OBSTACLE_BITFIELD` (4.22, partial decode), `CHILD_LOCK` (4.27), `CARPET_SECONDARY_FLAG` (4.33), `CARPET_HANDLING_MODE` (4.36, 5-value enum), `CLEAN_CARPETS_FIRST` (28.2), `SIDE_BRUSH_ROTATING_ON_CARPET` (28.29), `OBSTACLE_CROSSING_MODE` (28.38), `POWER_SAVING_CLEANING` (28.63).
-- Scale Inhibitor consumable added — `SCALE_INHIBITOR_DAYS_LEFT` (31.1), `SCALE_INHIBITOR_LEFT` (31.2). Same shape as SENSOR consumable.
-- `SETTINGS_PROP` corrections: `siid 3 piid 3` was wrongly labelled DND — it's actually `OFF_PEAK_CHARGING_CONFIG_JSON`. The real DND config lives at `siid 5 piid 4` as a JSON-string array of windows.
-- 7 more `FEATURE_CONFIG_KEYS` upgraded `?` → `✓` from live toggles (CarpetFineClean, RobotCarpetPressEnable, FillinLight, SbrushExtrSwitch, MopExtrSwitch, MonitorPromptLevel, PetPartClean) — 11 of ~36 keys now confirmed.
-- New enums: `CarpetHandlingMode`, `ObstacleCrossingMode`, `LiveVideoPrompts`.
-- Documented cross-coupling observations (Pet Recognition → Auto-Empty, Carpet Avoid → RobotCarpetPressEnable=-1) and the cloud-only settings set (auto-update, mopping-with-detergent, camera PIN, device rename, Matter PIN).
-- Matter support discovered — noted in README + project memory as a future-look option for basic vacuum capabilities (separate from the deep cloud catalogue node-dreame provides).
+## [0.1.0] - 2026-05-03
+
+Initial release. Pre-alpha — public API will change. See the README
+for the full coverage matrix and which device behaviours are verified
+against real hardware versus inherited from upstream sources.
+
+### Features
+
+- **Auth.** Email/password login against the Dreame native cloud, with
+  automatic token refresh.
+- **Device discovery.** List devices on the account, including shared
+  devices.
+- **MIoT property reads/writes and action invocations.** Typed helpers
+  for `getProperties`, `setProperties`, and `callAction`.
+- **MQTT live subscription.** Per-device socket emitting typed events:
+  `properties` (siid/piid changes), `props` (k/v pushes including OTA
+  state/progress), `info` (network + firmware), and `ota` (convenience
+  for combined state/progress).
+- **High-level `Vacuum` wrapper.** Cached typed state, `refresh()`,
+  `watch()`/`unwatch()`, common commands (`start`, `pause`, `stop`,
+  `dock`, `locate`, `clearWarning`, `startAutoEmpty`), and setters for
+  suction / water volume / cleaning mode / volume.
+- **Live-map decoding.** Pure decoder for the device's binary live-map
+  envelope (base64 + zlib), P-frame merge, OSS fetch for the cached
+  I-frame, and a `MapManager` state machine that ties the three
+  together. Output is `MapData` in raw mm world-frame coordinates so
+  the consuming app does the viewport transform.
+- **Lazy `vacuum.map` getter.** Auto-constructs and starts a
+  `MapManager` bound to the active subscription.
+- **`node-dreame/map` sub-export.** Lets consumers import just the
+  decoder / merge helpers without the rest of the surface.
+- **Property + action catalogue** (`miot-spec.ts`) covering vacuum
+  state, battery, consumables, dock settings, OTA, schedules, the
+  feature-toggle JSON, and the cloud-object channels. Each entry is
+  annotated `VERIFIED` or `ASSUMED` so consumers know what to trust.
+- **Device capability records.** `getCapabilities(model)` and
+  `vacuum.capabilities` return a typed `DeviceCapabilities` describing
+  what the model supports (mop, auto-empty, multi-floor, virtual
+  walls, etc.) and which suction / water / carpet / dock-setting
+  values it accepts. Curated entries return `verified: true`; unknown
+  models fall back to a conservative safe-default.
+- **Virtual walls and restricted areas in `MapData`.**
+  `MapData.virtualWalls` and `MapData.restrictedAreas` (no-go and
+  no-mop zones) decoded from the JSON tail's `vw` block. Coordinates
+  in raw mm world-frame.
+- **Cleaned-area overlay in `MapData`.** `MapData.cleanedArea`
+  decodes the recursive `decmap` blob — a parallel pixel grid with
+  cleaned/dirty run-length runs and optional per-segment cleaned-area
+  stats. Inner blob has its own dimensions independent of the parent
+  map.
+- **Vacuum semantic action helpers.** `cleanSegments(ids, opts?)`,
+  `cleanZones(zones, opts?)`, `cleanSpot(point, opts?)` for targeted
+  cleaning. `goHome()`, `resume()`, `cancelCurrentJob()` as readable
+  aliases for `dock`/`start`/`stop`. Defaults pick suction and water
+  from cached state.
+- **Saved-map list fetch.** `vacuum.fetchSavedMapList()` reads the
+  `MAP_LIST` pointer (siid 6 piid 8), fetches the OSS blob, and
+  returns the list of stored floors plus the active map id.
+- **Typed errors.** `DreameAuthError`, `DreameApiError`,
+  `DreameDeviceOfflineError`, `DreameTransportError`.
+
+### Examples
+
+- `examples/live-map-stream.ts` — minimal end-to-end map streaming.
+- `examples/server-sse.ts` — zero-deps SSE bridge for browser clients.
+- `examples/server-websocket.ts` — bidirectional WebSocket bridge.
+- `examples/log-events.ts` — long-running raw event logger.
+- Plus a handful of one-shot probe scripts under `examples/probe-*.ts`.
+
+### Tooling
+
+- ESM + CJS dual build via tsup.
+- TypeScript strict, type definitions emitted for both entries.
+- Vitest test suite (168 tests).
+- ESLint v9 flat config.
