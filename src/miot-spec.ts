@@ -538,9 +538,14 @@ export const CLOUD_OBJ_PROP = {
    */
   PATH: { siid: 6, piid: 3 } as const,
   /**
-   * VERIFIED on r2532a after OTA: JSON `{obj_name, md5}` pointing at a
-   * cloud-stored binary blob — most likely a fresh map snapshot fetched
-   * via the Aliyun OSS bucket. Path format: `ali_dreame/<uid>/<did>/<n>`.
+   * VERIFIED on r2532a 2026-05-03: JSON `{object_name, md5}` pointing at a
+   * cloud-stored binary blob — the saved-map list / fresh map snapshot
+   * fetched via the Aliyun OSS bucket. Path format:
+   * `ali_dreame/<uid>/<did>/<n>`.
+   *
+   * Note: earlier versions of this file (and some Tasshack-derived docs)
+   * called the key `obj_name`. The Dreame native cloud uses
+   * `object_name` — but consumer code accepts both for compatibility.
    */
   POINTER_JSON: { siid: 6, piid: 8 } as const,
   /**

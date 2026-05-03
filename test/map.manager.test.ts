@@ -18,7 +18,7 @@
  *   - map_id mismatch resets state and requests I-frame
  *   - stale I-frame (same mapId, older frameId) is dropped
  *   - PATH push fetches OSS blob and ingests as I-frame
- *   - POINTER_JSON push parses `obj_name` and ingests
+ *   - POINTER_JSON push parses `object_name` and ingests
  *   - duplicate PATH dedupes (no second fetch)
  *   - irrelevant pushes (wrong did, wrong siid) ignored
  *   - start()/stop() attach/detach the listener
@@ -346,7 +346,7 @@ describe("MapManager: OSS pointer", () => {
     });
     mgr.start();
 
-    pushProp(source, 8, JSON.stringify({ obj_name: "ali_dreame/UID/DID-1/9", md5: "abc" }));
+    pushProp(source, 8, JSON.stringify({ object_name: "ali_dreame/UID/DID-1/9", md5: "abc" }));
     await new Promise((r) => setImmediate(r));
 
     expect(events.map((e) => e.frameId)).toEqual([300]);

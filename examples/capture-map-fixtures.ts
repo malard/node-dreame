@@ -147,19 +147,20 @@ async function capture(n: number, piid: number, value: unknown): Promise<void> {
     return;
   }
 
-  // siid 6 piid 8 — POINTER_JSON {obj_name, md5}; resolve + download
+  // siid 6 piid 8 — POINTER_JSON {object_name, md5}; resolve + download
   if (piid === CLOUD_OBJ_PROP.POINTER_JSON.piid) {
     const pointer = parsePointer(value);
     Object.assign(meta, { kind: "oss-pointer", pointer });
-    if (pointer?.obj_name) {
-      const downloaded = await tryDownloadOss(pointer.obj_name);
+    const objName = pointer?.object_name ?? pointer?.obj_name;
+    if (objName) {
+      const downloaded = await tryDownloadOss(objName);
       if (downloaded) {
         const frameTag = headerFrameTag(downloaded.bytes);
         const stemFt = `${stem}-${frameTag}`;
         writeBin(stemFt, downloaded.bytes);
         Object.assign(meta, { downloadedFrom: downloaded.url, frameTag, byteLen: downloaded.bytes.length });
         writeMeta(stemFt, meta);
-        console.log(`[${ts}] #${n} POINTER → fetched ${frameTag} (${downloaded.bytes.length} bytes) from ${pointer.obj_name}`);
+        console.log(`[${ts}] #${n} POINTER → fetched ${frameTag} (${downloaded.bytes.length} bytes) from ${objName}`);
         return;
       }
       Object.assign(meta, { downloadError: "resolve or fetch failed — see stderr" });
@@ -249,6 +250,9 @@ function tryBase64(s: string): Buffer | null {
 }
 
 interface OssPointer {
+  /** Live shape on Dreame native (verified r2532a 2026-05-03). */
+  object_name?: string;
+  /** Older / Tasshack-derived alias. Accept defensively. */
   obj_name?: string;
   md5?: string;
 }

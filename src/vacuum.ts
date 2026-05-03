@@ -492,7 +492,7 @@ export class Vacuum extends EventEmitter {
    * pointer to the currently-active one).
    *
    * Reads the OSS pointer from `siid 6 piid 8` (`MAP_LIST` /
-   * `POINTER_JSON`) — a JSON `{obj_name, md5}` — fetches the OSS blob
+   * `POINTER_JSON`) — a JSON `{object_name, md5}` — fetches the OSS blob
    * via `OssFetcher`, parses the wrapper JSON, and decodes each
    * inner saved-map blob via `MapDecoder`.
    *
@@ -517,16 +517,19 @@ export class Vacuum extends EventEmitter {
     if (!pointer || pointer.code !== 0 || typeof pointer.value !== "string" || !pointer.value) {
       return null;
     }
-    let parsed: { obj_name?: unknown };
+    let parsed: { object_name?: unknown; obj_name?: unknown };
     try {
-      parsed = JSON.parse(pointer.value) as { obj_name?: unknown };
+      parsed = JSON.parse(pointer.value) as typeof parsed;
     } catch {
       return null;
     }
-    const objName = parsed.obj_name;
-    if (typeof objName !== "string" || !objName) {
+    // Dreame native publishes `object_name`; older notes / Tasshack docs
+    // sometimes call it `obj_name`. Accept either.
+    const objNameRaw = parsed.object_name ?? parsed.obj_name;
+    if (typeof objNameRaw !== "string" || !objNameRaw) {
       return null;
     }
+    const objName: string = objNameRaw;
 
     if (!this.#ossFetcher) {
       this.#ossFetcher = new OssFetcher();

@@ -44,18 +44,19 @@ if (!pointer || pointer.code !== 0 || typeof pointer.value !== "string" || !poin
   process.exit(1);
 }
 
-let parsed: { obj_name?: unknown; md5?: unknown };
+let parsed: { object_name?: unknown; obj_name?: unknown; md5?: unknown };
 try {
-  parsed = JSON.parse(pointer.value) as { obj_name?: unknown };
+  parsed = JSON.parse(pointer.value) as typeof parsed;
 } catch (err) {
   console.error("MAP_LIST pointer not JSON:", err);
   process.exit(1);
 }
-console.log(`obj_name: ${parsed.obj_name}`);
-console.log(`md5:      ${parsed.md5 ?? "(none)"}`);
+const objName = parsed.object_name ?? parsed.obj_name;
+console.log(`object_name: ${objName}`);
+console.log(`md5:         ${parsed.md5 ?? "(none)"}`);
 
-if (typeof parsed.obj_name !== "string") {
-  console.error("MAP_LIST.obj_name not a string");
+if (typeof objName !== "string") {
+  console.error("MAP_LIST.object_name not a string");
   process.exit(1);
 }
 
@@ -68,7 +69,7 @@ const bytes = await fetcher.fetchBlob({
   lang: dreame.lang,
   did: device.did,
   model: device.model,
-  filename: parsed.obj_name,
+  filename: objName,
 });
 console.log(`OSS body: ${bytes.length} bytes`);
 console.log(`first 200 chars:\n${bytes.toString("utf8").slice(0, 200)}`);

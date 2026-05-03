@@ -11,7 +11,7 @@
  *   - `siid 6 piid 3` (PATH)         — OSS object name string. The
  *     device parks the current I-frame in OSS and advertises the path
  *     here on first push and on map_id changes.
- *   - `siid 6 piid 8` (POINTER_JSON) — `{obj_name, md5}` pointer. Same
+ *   - `siid 6 piid 8` (POINTER_JSON) — `{object_name, md5}` pointer. Same
  *     idea as PATH, used after OTAs / fresh-snapshot triggers.
  *
  * The manager:
@@ -235,20 +235,22 @@ export class MapManager extends EventEmitter {
   }
 
   async #handlePointerJsonPush(value: unknown): Promise<void> {
-    let parsed: { obj_name?: unknown };
+    let parsed: { object_name?: unknown; obj_name?: unknown };
     if (typeof value === "string") {
       try {
-        parsed = JSON.parse(value) as { obj_name?: unknown };
+        parsed = JSON.parse(value) as typeof parsed;
       } catch (err) {
         this.#emitError(new MapDecodeError(`POINTER_JSON: invalid JSON ${String(err)}`));
         return;
       }
     } else if (value && typeof value === "object") {
-      parsed = value as { obj_name?: unknown };
+      parsed = value as typeof parsed;
     } else {
       return;
     }
-    const objName = parsed.obj_name;
+    // Dreame native publishes `object_name`; older notes / Tasshack docs
+    // sometimes say `obj_name`. Accept either.
+    const objName = parsed.object_name ?? parsed.obj_name;
     if (typeof objName !== "string" || objName.length === 0) {
       return;
     }
