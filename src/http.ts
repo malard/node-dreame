@@ -232,10 +232,8 @@ export async function httpPostJsonBody<T extends BaseResponse>(input: {
 /**
  * Compose a caller signal with a timeout signal. Returns whichever is
  * non-trivial, or `undefined` when timeout is disabled (`0`) and no
- * caller signal is supplied.
- *
- * Prefers native `AbortSignal.any` (Node ≥20.5) and falls back to a
- * manual controller-based merge for Node 18.
+ * caller signal is supplied. Uses native `AbortSignal.any`
+ * (`engines.node >= 24` in package.json).
  */
 function composeSignals(callerSignal: AbortSignal | undefined, timeoutMs: number): AbortSignal | undefined {
   if (timeoutMs <= 0) {
@@ -245,28 +243,7 @@ function composeSignals(callerSignal: AbortSignal | undefined, timeoutMs: number
   if (!callerSignal) {
     return timeoutSignal;
   }
-  if (typeof AbortSignal.any === "function") {
-    return AbortSignal.any([callerSignal, timeoutSignal]);
-  }
-  return mergeSignals(callerSignal, timeoutSignal);
-}
-
-function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
-  const ctrl = new AbortController();
-  const onAbort = (which: AbortSignal): void => {
-    ctrl.abort(which.reason);
-  };
-  if (a.aborted) {
-    onAbort(a);
-  } else {
-    a.addEventListener("abort", () => onAbort(a), { once: true });
-  }
-  if (b.aborted) {
-    onAbort(b);
-  } else {
-    b.addEventListener("abort", () => onAbort(b), { once: true });
-  }
-  return ctrl.signal;
+  return AbortSignal.any([callerSignal, timeoutSignal]);
 }
 
 function isAbortError(err: unknown): boolean {

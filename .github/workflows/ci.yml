@@ -14,7 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["18", "20", "22"]
+        # Active LTS only. Node 18 EOL'd 2025-04, Node 20 EOL'd 2026-04.
+        node: ["24"]
 
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +31,9 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
 
       - name: Test
         run: npm test

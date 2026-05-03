@@ -33,12 +33,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node 22
+      - name: Setup Node 24
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+          node-version: "24"
+          # Deliberately NO `registry-url:` — it writes an .npmrc with
+          # `_authToken=${NODE_AUTH_TOKEN}`, which under Trusted Publishing
+          # short-circuits OIDC auth and produces a confusing 404.
           cache: npm
+
+      - name: Upgrade npm to latest (OIDC Trusted Publishing requires npm >= 11.5.1)
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: npm ci

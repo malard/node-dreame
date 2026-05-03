@@ -1,6 +1,6 @@
 {
   "name": "node-dreame",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Node.js client for the Dreame native cloud (Dreamehome app backend). Control Dreame robot vacuums without going via Home Assistant or Xiaomi Mi cloud.",
   "keywords": [
     "dreame",
@@ -45,7 +45,7 @@
     "CHANGELOG.md"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "scripts": {
     "build": "tsup",
@@ -61,7 +61,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
-    "@types/node": "^22.0.0",
+    "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
     "eslint": "^9.39.4",
     "globals": "^15.15.0",

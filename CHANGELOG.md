@@ -7,10 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-05-03
+## [0.1.2] - 2026-05-03
 
-Post-release code-review pass. No new device features — all changes are
-internal hygiene and small public-API refinements.
+Post-release code-review pass plus a Node-engine bump to current LTS.
+No new device features — all changes are internal hygiene, public-API
+refinements, and CI/CD plumbing fixes.
+
+> 0.1.1 was tagged but never reached the npm registry — the Release
+> workflow's bundled npm was too old to use OIDC Trusted Publishing
+> for the registry PUT. 0.1.2 supersedes it.
+
+### Breaking changes
+
+- **Minimum Node.js version is now 24.** `engines.node` raised from
+  `>=18` to `>=24`. Node 18 reached end-of-life in April 2025 and
+  Node 20 reached end-of-life in April 2026 — both are unsupported.
+  Node 22 is dropped from the support matrix to keep the surface small.
 
 ### Breaking changes
 
@@ -28,6 +40,22 @@ internal hygiene and small public-API refinements.
   `DreameClient.getProperties`/`setProperties`).** Throws `DreameApiError`
   instead of returning `[]` when the cloud's response shape is not
   recognised — masking these used to hide bugs.
+
+### CI / Release
+
+- **Release workflow updated** to use Node 24, force-upgrade npm to the
+  latest before publish (OIDC Trusted Publishing requires npm >= 11.5.1),
+  and drop the `registry-url:` setup-node parameter that was injecting
+  an empty-token `.npmrc` and short-circuiting OIDC auth.
+- **CI matrix narrowed to Node 24 only** and the lint step is now part
+  of the gate (was previously only enforced via `prepublishOnly`).
+- **`@types/node` bumped to `^24.0.0`** to match the engine floor.
+
+### Cleanup
+
+- **`src/http.ts` `composeSignals`** now uses native `AbortSignal.any`
+  unconditionally; the manual `mergeSignals` controller-based fallback
+  required for Node 18 has been deleted.
 
 ### Features
 
