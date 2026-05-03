@@ -437,14 +437,19 @@ describe("parseCleanedAreaOverlay", () => {
 // ─── real fixture round-trip ─────────────────────────────────────────
 
 describeReal("real fixture: 001-piid1 (r2532a P-frame, map_id=3, frame_id=584)", () => {
-  const meta = JSON.parse(fs.readFileSync(FIXTURE_001_META, "utf8")) as { rawValue: string };
+  // Lazy load — describe.skip doesn't prevent describe-block execution,
+  // so reading the file here would ENOENT in CI when fixtures are absent.
+  const loadMeta = () =>
+    JSON.parse(fs.readFileSync(FIXTURE_001_META, "utf8")) as { rawValue: string };
 
   it("unwraps the MQTT base64+zlib envelope", () => {
+    const meta = loadMeta();
     const inflated = unwrapEnvelope(meta.rawValue);
     expect(inflated.length).toBeGreaterThan(HEADER_SIZE);
   });
 
   it("parses the header to expected values", () => {
+    const meta = loadMeta();
     const inflated = unwrapEnvelope(meta.rawValue);
     const header = parseMapHeader(inflated);
     expect(header.mapId).toBe(3);
@@ -458,6 +463,7 @@ describeReal("real fixture: 001-piid1 (r2532a P-frame, map_id=3, frame_id=584)",
   });
 
   it("parses the JSON tail with the keys v1 cares about", () => {
+    const meta = loadMeta();
     const inflated = unwrapEnvelope(meta.rawValue);
     const header = parseMapHeader(inflated);
     const tailText = inflated.subarray(HEADER_SIZE + header.width * header.height).toString("utf8");
@@ -471,6 +477,7 @@ describeReal("real fixture: 001-piid1 (r2532a P-frame, map_id=3, frame_id=584)",
   });
 
   it("MapDecoder.decode returns a complete MapData", () => {
+    const meta = loadMeta();
     const md = MapDecoder.decode(meta.rawValue);
     expect(md.mapId).toBe(3);
     expect(md.frameId).toBe(584);
@@ -508,9 +515,10 @@ describeReal("real fixture: 001-piid1 (r2532a P-frame, map_id=3, frame_id=584)",
 // ─── real I-frame fixture (fetched from OSS via PATH push) ──────────
 
 describeIFrame("real I-frame fixture (OSS-fetched on r2532a)", () => {
-  const envelope = fs.readFileSync(FIXTURE_IFRAME_ENV, "utf8");
+  const loadEnvelope = () => fs.readFileSync(FIXTURE_IFRAME_ENV, "utf8");
 
   it("decodes the full I-frame end-to-end", () => {
+    const envelope = loadEnvelope();
     const md = MapDecoder.decode(envelope);
     expect(md.frameType).toBe("I");
     expect(md.mapId).toBe(3);
@@ -526,6 +534,7 @@ describeIFrame("real I-frame fixture (OSS-fetched on r2532a)", () => {
   });
 
   it("decodes layers (wall + floor + per-segment)", () => {
+    const envelope = loadEnvelope();
     const md = MapDecoder.decode(envelope);
     const types = md.layers.map((l) => l.type);
     expect(types).toContain("wall");
@@ -538,6 +547,7 @@ describeIFrame("real I-frame fixture (OSS-fetched on r2532a)", () => {
   });
 
   it("collects sensible segments (each with non-zero bbox area)", () => {
+    const envelope = loadEnvelope();
     const md = MapDecoder.decode(envelope);
     expect(md.segments.length).toBeGreaterThanOrEqual(5);
     for (const s of md.segments) {
@@ -554,6 +564,7 @@ describeIFrame("real I-frame fixture (OSS-fetched on r2532a)", () => {
   });
 
   it("decodes obstacles", () => {
+    const envelope = loadEnvelope();
     const md = MapDecoder.decode(envelope);
     expect(md.obstacles.length).toBeGreaterThan(0);
     for (const o of md.obstacles) {
