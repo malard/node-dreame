@@ -131,6 +131,25 @@ Extended at #25: `MapData`, `MapLayer`, `MapSegment`, `MapPath`,
 arrays, so renderers can't mutate the buffer that `MapManager` keeps
 as the running merged state.
 
+## No backwards-compat scaffolding
+
+Until a v1.0 cut, this repo deliberately does not carry version-sniffing
+or fallback paths for older firmware. Specifically:
+
+- **No firmware-version branches.** Assume the device is on the latest
+  firmware available for its model. If a property meaning changes
+  across firmware, update the entry to reflect current reality and
+  drop the old reading rather than maintaining both.
+- **Drop ASSUMED entries when contradicted.** If live observation shows
+  a Tasshack-borrowed enum value is wrong on the X50 generation, change
+  the entry to the verified value and remove the `ASSUMED` doc — don't
+  add a parallel "old vs new" enum.
+- **No internal API stability guarantees.** Rename, remove, or reshape
+  internal helpers freely. Tests get updated as part of the change.
+- **Public API breaks are fine** until a v1.0 — every behavioural
+  change to a published method needs a CHANGELOG entry but does not
+  need a deprecation cycle.
+
 ## HTTP header keys are always lowercase
 
 Every header key emitted from the library is lower-case
