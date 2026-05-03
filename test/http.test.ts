@@ -155,4 +155,62 @@ describe("httpPostJson — error classification", () => {
       }),
     ).rejects.toBeInstanceOf(DreameAuthError);
   });
+
+  it("aborts the underlying fetch when timeoutMs elapses (DreameTransportError)", async () => {
+    // fetch impl that honours signal: rejects with AbortError when the signal aborts.
+    const slowFetch: typeof fetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("test fetch impl needs a signal");
+        }
+        signal.addEventListener("abort", () => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    const ctx = makeCtx({ fetchImpl: slowFetch });
+
+    await expect(
+      httpPostJson({
+        ctx,
+        url: ctx.url("/slow"),
+        headers: {},
+        body: "",
+        context: "slow op",
+        timeoutMs: 20,
+      }),
+    ).rejects.toBeInstanceOf(DreameTransportError);
+  });
+
+  it("respects a caller-supplied AbortSignal that's already aborted", async () => {
+    const slowFetch: typeof fetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        const abortNow = (): void => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        };
+        if (init?.signal?.aborted) {
+          abortNow();
+          return;
+        }
+        init?.signal?.addEventListener("abort", abortNow);
+      });
+    const ctx = makeCtx({ fetchImpl: slowFetch });
+    const ctrl = new AbortController();
+    ctrl.abort();
+
+    await expect(
+      httpPostJson({
+        ctx,
+        url: ctx.url("/foo"),
+        headers: {},
+        body: "",
+        context: "cancel",
+        signal: ctrl.signal,
+      }),
+    ).rejects.toBeInstanceOf(DreameTransportError);
+  });
 });

@@ -16,6 +16,9 @@ import { buildHeaders } from "./headers.js";
 /** Cloud response code that means "device didn't ACK; may be offline". */
 const CODE_DEVICE_OFFLINE = 80001;
 
+/** Default per-request timeout — fetch() is otherwise unbounded. */
+const DEFAULT_TIMEOUT_MS = 30000;
+
 /**
  * Holds the resolved per-request context — region defaults, host, fetch
  * impl. Used by every HTTP-emitting module so they don't each re-resolve
@@ -128,8 +131,19 @@ export async function httpPostJson<T extends BaseResponse>(input: {
   errorClass?: typeof DreameApiError | typeof DreameAuthError;
   /** Skip the `parsed.code !== 0` check (auth endpoint doesn't use it). */
   skipCodeCheck?: boolean;
+  /**
+   * Per-request timeout in ms. Default 30000. Pass `0` to disable. The
+   * underlying fetch call is aborted via `AbortSignal.timeout` and the
+   * resulting `AbortError` surfaces as a `DreameTransportError`.
+   */
+  timeoutMs?: number;
+  /** Caller-supplied AbortSignal. Composed with the timeout signal. */
+  signal?: AbortSignal;
 }): Promise<T> {
   const Err = input.errorClass ?? DreameApiError;
+
+  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const signal = composeSignals(input.signal, timeoutMs);
 
   let res: Response;
   try {
@@ -137,8 +151,15 @@ export async function httpPostJson<T extends BaseResponse>(input: {
       method: "POST",
       headers: input.headers,
       body: input.body,
+      ...(signal !== undefined ? { signal } : {}),
     });
   } catch (err) {
+    if (isAbortError(err)) {
+      throw new DreameTransportError(
+        `request to ${input.url} aborted after ${timeoutMs}ms or by caller`,
+        err,
+      );
+    }
     throw new DreameTransportError(`network error contacting ${input.url}`, err);
   }
 
@@ -191,6 +212,8 @@ export async function httpPostJsonBody<T extends BaseResponse>(input: {
   accessToken?: string;
   body: unknown;
   context: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<T> {
   return httpPostJson<T>({
     ctx: input.ctx,
@@ -201,5 +224,51 @@ export async function httpPostJsonBody<T extends BaseResponse>(input: {
     }),
     body: JSON.stringify(input.body),
     context: input.context,
+    ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
+}
+
+/**
+ * Compose a caller signal with a timeout signal. Returns whichever is
+ * non-trivial, or `undefined` when timeout is disabled (`0`) and no
+ * caller signal is supplied.
+ *
+ * Prefers native `AbortSignal.any` (Node ≥20.5) and falls back to a
+ * manual controller-based merge for Node 18.
+ */
+function composeSignals(callerSignal: AbortSignal | undefined, timeoutMs: number): AbortSignal | undefined {
+  if (timeoutMs <= 0) {
+    return callerSignal;
+  }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!callerSignal) {
+    return timeoutSignal;
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any([callerSignal, timeoutSignal]);
+  }
+  return mergeSignals(callerSignal, timeoutSignal);
+}
+
+function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
+  const ctrl = new AbortController();
+  const onAbort = (which: AbortSignal): void => {
+    ctrl.abort(which.reason);
+  };
+  if (a.aborted) {
+    onAbort(a);
+  } else {
+    a.addEventListener("abort", () => onAbort(a), { once: true });
+  }
+  if (b.aborted) {
+    onAbort(b);
+  } else {
+    b.addEventListener("abort", () => onAbort(b), { once: true });
+  }
+  return ctrl.signal;
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
 }
