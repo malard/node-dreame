@@ -149,10 +149,24 @@ const FALLBACK: Omit<DeviceCapabilities, "model"> = {
   supportedAutoEmptyFrequencies: [],
 };
 
+function deepFreeze<T>(obj: T): T {
+  if (obj && typeof obj === "object" && !Object.isFrozen(obj)) {
+    Object.freeze(obj);
+    for (const v of Object.values(obj)) {
+      deepFreeze(v);
+    }
+  }
+  return obj;
+}
+
 /**
  * Curated per-model capability table. Each entry is the result of
  * cross-referencing `miot-spec.ts` annotations against observed
  * behaviour on the listed model. Add models as they're verified.
+ *
+ * Each entry is deep-frozen at module load (see below) — `getCapabilities`
+ * returns table entries by reference and a stray mutation would otherwise
+ * corrupt them for every subsequent caller.
  */
 export const MODEL_CAPABILITIES: Readonly<Record<string, DeviceCapabilities>> = {
   /** Dreame X50 Ultra Complete — verified against firmware 4.3.9_2199 (2026-05-02). */
@@ -213,6 +227,10 @@ export const MODEL_CAPABILITIES: Readonly<Record<string, DeviceCapabilities>> = 
     ],
   },
 };
+
+for (const entry of Object.values(MODEL_CAPABILITIES)) {
+  deepFreeze(entry);
+}
 
 /**
  * Resolve a model identifier to a `DeviceCapabilities` record.

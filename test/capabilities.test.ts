@@ -170,3 +170,18 @@ describe("Vacuum.capabilities", () => {
     expect(v.capabilities.canAutoEmpty).toBe(false);
   });
 });
+
+describe("MODEL_CAPABILITIES table immutability", () => {
+  it("table entries are deep-frozen", () => {
+    const cap = MODEL_CAPABILITIES["dreame.vacuum.r2532a"]!;
+    expect(Object.isFrozen(cap)).toBe(true);
+    expect(Object.isFrozen(cap.supportedSuctionLevels)).toBe(true);
+  });
+
+  it("attempting to mutate a returned record throws in strict mode", () => {
+    const cap = getCapabilities("dreame.vacuum.r2532a");
+    expect(() => {
+      (cap as { verified: boolean }).verified = false;
+    }).toThrow();
+  });
+});
