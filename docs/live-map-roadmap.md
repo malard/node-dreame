@@ -701,49 +701,44 @@ unknown models get a conservative fallback with `verified: false`.
 Add new models by appending to `MODEL_CAPABILITIES` after confirming
 each flag against real hardware.
 
-### 2. Semantic action helpers
+### 2. Semantic action helpers — DONE (2026-05-03)
 
-`Vacuum` currently exposes raw siid/piid actions. dunbar-os shouldn't
-have to know the byte-level shape. Add intent-level methods:
+Shipped on `Vacuum`: `cleanSegments(ids, opts?)`, `cleanZones(zones,
+opts?)`, `cleanSpot(point, opts?)`, plus the readable aliases
+`goHome()`, `resume()`, `cancelCurrentJob()`. All three custom-clean
+helpers dispatch the `START_CUSTOM` action (siid 4 aiid 1) with the
+right mode int + JSON payload (Tasshack `device.py:4530-4787`
+reference). Defaults pull suction/water from cached state.
 
-- `vacuum.cleanSegments(ids: number[], opts?)` — resolves segment IDs
-  to the device's `room_clean` action shape.
-- `vacuum.goHome()` — dock action with the right action params.
-- `vacuum.setSuction(level: SuctionLevel)` — already exists; verify
-  for r2532a.
-- `vacuum.cancelCurrentJob()` — STOP with the right preconditions.
-- `vacuum.spotClean(point: { x, y })` — point-clean action.
-- `vacuum.setNoGoZones(rects)` (later — paired with vw decode).
+ASSUMED — these have not been live-fired against r2532a (would
+actually run the robot). Confirm before relying on them in production.
 
-These are the "abilities" surface — what dunbar-os calls when the
-user clicks a button. They centralise the "which siid/piid/aiid
-combination expresses this intent on this model" knowledge.
+### 3. `vw.line` / `vw.rect` decode — DONE (2026-05-03)
 
-### 3. `vw.line` / `vw.rect` decode (read-only first)
+Shipped as `MapData.virtualWalls` (line segments) and
+`MapData.restrictedAreas` (axis-aligned no-go AND no-mop boxes,
+discriminated by `kind`). Coordinates in raw mm world-frame.
+`parseVirtualWalls` is exported from `node-dreame/map` for direct
+use. The merge layer falls back to prev's `vw` when a P-frame
+doesn't carry one.
 
-Surface virtual walls and no-go rectangles in `MapData`:
+Wire format verified from Tasshack `dev` `map.py:4597-4669`. The
+fixture we have doesn't include any user-defined geometry, so the
+synthetic-input tests are the verification surface today.
 
-```ts
-interface MapData {
-  // ...
-  virtualWalls: Array<{ from: MapPoint; to: MapPoint }>;
-  noGoZones: Array<{ x0: number; y0: number; x1: number; y1: number }>;
-}
-```
+### 4. Saved-map list — DONE (2026-05-03) + multi-floor refactor (BLOCKED)
 
-Decode-only is small. Editing is much bigger (a separate action shape
-plus a write path) and lives in #4 below.
+**`Vacuum.fetchSavedMapList()`** — VERIFIED on r2532a 2026-05-03.
+Reads `siid 6 piid 8` (`MAP_LIST` / `POINTER_JSON`), fetches the OSS
+blob via the existing `getDownloadUrl` endpoint, and parses the
+Tasshack-shape wrapper `{ mapstr: [{ map, name?, angle? }, ...],
+curr_id }`. Live test on r2532a returned 1 saved map: `mapId=1,
+name="Ground Floor", angle=90°, 8 segments, 2 virtual walls`.
 
-### 4. Saved-map list (ASSUMED) + multi-floor MapManager refactor (BLOCKED)
-
-**`Vacuum.fetchSavedMapList()`** — shipped. Reads `siid 6 piid 8`
-(`MAP_LIST` / `POINTER_JSON`), fetches the OSS blob via the existing
-`getDownloadUrl` endpoint, and parses the wrapper as
-`{ mapstr: [{ map, name?, angle? }, ...], curr_id }` per Tasshack's
-Mi-cloud reference. The wrapper key names are **ASSUMED** to match on
-Dreame native — verify by running `examples/probe-saved-maps.ts` on a
-real device. If the format differs, update
-`src/vacuum.ts:decodeSavedMapList`.
+The pointer JSON's key is **`object_name`** (not `obj_name` as some
+Tasshack-derived docs claimed). `decodeSavedMapList` and the
+`MapManager` POINTER_JSON handler accept either spelling defensively,
+preferring `object_name`.
 
 **Multi-floor MapManager refactor** — BLOCKED until we have:
 1. A live capture of the device announcing a floor switch (does it
@@ -757,14 +752,18 @@ resets state and requests a fresh I-frame on `mapId` mismatch — fine
 for single-floor homes, lossy for multi-floor. Re-open when dunbar-os
 actually exercises floor-switching.
 
-### 5. `decmap` cleaned-area overlay decode
+### 5. `decmap` cleaned-area overlay decode — DONE (2026-05-03)
 
-Decode the `decmap` recursive-blob field in the JSON tail into a
-parallel `MapData.cleanedArea` layer (run-length encoded the same way
-other layers are). Lets dunbar-os shade "what's been cleaned this
-session" over the floor plan.
+Shipped as `MapData.cleanedArea: MapCleanedAreaOverlay | null`.
+`decmap` is a recursive blob (a full nested map envelope embedded as
+base64 in the parent tail); the decoder unwraps it, parses the inner
+header for its own dimensions, and emits two run-length runs:
+`cleaned` (low-bits == 1) and `dirty` (low-bits == 2). Inner
+`CleanArea` per-segment stats surfaced as `cleanedSegments`.
 
-Lower priority — useful but not blocking.
+Inner blob has its own dimensions independent of the parent — the
+renderer reprojects. Wire format verified from Tasshack `dev`
+`map.py:5162-5233`.
 
 ### 6. Editing virtual walls / no-go zones (later)
 
