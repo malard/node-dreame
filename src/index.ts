@@ -27,7 +27,7 @@ export type {
   RawMqttEvent,
 } from "./mqtt.js";
 export { Vacuum } from "./vacuum.js";
-export type { VacuumState, DeviceTotals, CleanOpts } from "./vacuum.js";
+export type { VacuumState, DeviceTotals, CleanOpts, CleaningHistoryRecord } from "./vacuum.js";
 export {
   MiotState,
   ChargingStatus,

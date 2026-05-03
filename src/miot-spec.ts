@@ -297,14 +297,21 @@ export const VACUUM_PROP = {
    */
   MOP_ROTATION_PULSE: { siid: 4, piid: 58 } as const,
   /**
-   * VERIFIED on r2532a 2026-05-02 — task-sequence counter that **resets to 0
-   * at task end**. Increments roughly every ~30-90s during active cleaning
-   * (count of waypoints / decision points / sub-tasks). Useful as a "task
-   * is alive" heartbeat that doesn't depend on MiotState transitions.
+   * VERIFIED on r2532a 2026-05-02..03 — generic **device-activity
+   * counter**. Resets to 0 at end-of-task (cleaning task summary
+   * fires) and then increments roughly once per minute for as long as
+   * the device is doing anything (cleaning, mop wash, mop dry, etc.).
    *
-   * Previously this property was misidentified as a schedule-edit counter
-   * (`SCHEDULE_PROP.EDIT_COUNTER`). The end-of-task `→ 0` reset captured on
-   * 2026-05-02 disproved that and confirmed the per-task scope.
+   * Originally labelled "task-sequence counter resets at task end" —
+   * the reset behaviour was correct, but the post-task increments
+   * (observed 2026-05-03 ticking through 0→7+ during MopDrying)
+   * showed the counter is broader than just active cleaning. Useful
+   * as a "device is doing something" heartbeat.
+   *
+   * Previously this property was misidentified as a schedule-edit
+   * counter (`SCHEDULE_PROP.EDIT_COUNTER`). The end-of-task reset
+   * captured on 2026-05-02 disproved that and confirmed the
+   * activity-scope interpretation.
    */
   TASK_RESET_COUNTER: { siid: 4, piid: 64 } as const,
   /**
@@ -711,18 +718,24 @@ export const CAMERA_PROP = {
  */
 export const NOTIFICATION_PROP = {
   /**
-   * VERIFIED on r2532a 2026-05-02 — "stuck notification" flag. Despite the
-   * name, this flag is **preemptive / precautionary**, not a confirmed-stuck
-   * signal:
-   *   - Fires `0 → 1` when the device is "concerned about navigation progress"
-   *     (e.g. dock-return takes longer than expected).
-   *   - Clears `1 → 0` automatically once docking succeeds.
-   *   - Genuine stuck cases keep it pinned to `1` until the user intervenes
-   *     (observed sticky for 2 hours in a real stuck event).
+   * VERIFIED on r2532a 2026-05-02..03 — generic **"device needs user
+   * attention"** flag (despite the name). Multiple distinct triggers
+   * observed live:
+   *   - Navigation concerns / preemptive stuck warnings (the original
+   *     observation that gave it the name).
+   *   - Post-task **water-tank service alerts** ("clean water tank
+   *     low / dirty water tank full, please refill/empty") — fires
+   *     once after the dock finishes washing the mop. User confirmed
+   *     2026-05-03 by reporting the matching app prompt.
+   *   - Genuine stuck cases keep it pinned to `1` until the user
+   *     intervenes (observed sticky for 2 hours in a real stuck event).
    *
-   * Treat as "robot may need attention" rather than "robot is definitely
-   * stuck" — disambiguate by stickiness (>5 min?) and correlation with
-   * ERROR codes.
+   * Treat as "robot may need attention" — disambiguate by:
+   *   - stickiness (>5 min suggests a real stuck condition)
+   *   - correlation with ERROR codes (`siid 2 piid 2`)
+   *   - state context (e.g. fires during state 8 MopDrying ⇒ likely
+   *     water-tank prompt, not navigation)
+   *   - Dreame app's own message overlay (the canonical UX surface).
    */
   STUCK_NOTIFICATION_ACTIVE: { siid: 14, piid: 4 } as const,
 } as const;
