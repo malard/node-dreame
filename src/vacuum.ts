@@ -86,6 +86,12 @@ export interface VacuumState {
   cleaningTimeMin: number | null;
   /** Area cleaned this job in m² (siid 4 piid 3). ASSUMED. */
   cleanedAreaSqm: number | null;
+  /**
+   * Task progress percentage (siid 4 piid 63), 0..100. Hits 100 at
+   * end-of-task right before the `taskComplete` event fires, then
+   * resets to 0. VERIFIED on r2532a 2026-05-03.
+   */
+  taskProgressPct: number | null;
   /** Voice volume 0-100 (siid 7 piid 1). ASSUMED. */
   volume: number | null;
 
@@ -123,6 +129,7 @@ const EMPTY_STATE: VacuumState = {
   cleaningMode: null,
   cleaningTimeMin: null,
   cleanedAreaSqm: null,
+  taskProgressPct: null,
   volume: null,
   mainBrushLeftPct: null,
   sideBrushLeftPct: null,
@@ -302,6 +309,7 @@ export class Vacuum extends EventEmitter {
       VACUUM_PROP.CLEANING_MODE,
       VACUUM_PROP.CLEANING_TIME,
       VACUUM_PROP.CLEANED_AREA,
+      VACUUM_PROP.TASK_PROGRESS_PCT,
       BATTERY_PROP.LEVEL,
       BATTERY_PROP.CHARGING_STATUS,
       SETTINGS_PROP.VOLUME,
@@ -884,6 +892,7 @@ const APPLIERS: Record<string, Applier> = {
   }),
   [propKey(VACUUM_PROP.CLEANING_TIME)]: (num) => ({ cleaningTimeMin: num }),
   [propKey(VACUUM_PROP.CLEANED_AREA)]: (num) => ({ cleanedAreaSqm: num }),
+  [propKey(VACUUM_PROP.TASK_PROGRESS_PCT)]: (num) => ({ taskProgressPct: num }),
   [propKey(SETTINGS_PROP.VOLUME)]: (num) => ({ volume: num }),
   [propKey(CONSUMABLE_PROP.MAIN_BRUSH_LEFT)]: (num) => ({ mainBrushLeftPct: num }),
   [propKey(CONSUMABLE_PROP.SIDE_BRUSH_LEFT)]: (num) => ({ sideBrushLeftPct: num }),

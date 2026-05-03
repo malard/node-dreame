@@ -297,6 +297,19 @@ export const VACUUM_PROP = {
    */
   MOP_ROTATION_PULSE: { siid: 4, piid: 58 } as const,
   /**
+   * VERIFIED on r2532a 2026-05-03 — **task progress percentage**.
+   * Counts up monotonically from 0 → 100 during an active cleaning
+   * task (with occasional small jumps both up and down as the device
+   * re-estimates remaining work). Hits exactly `100` at the moment
+   * the device flags the task as complete (right before the
+   * `event_occured siid 4 eiid 1` summary event), then snaps to `0`
+   * once the post-task cycle settles.
+   *
+   * Reliable signal for "show a progress bar in the UI" — far more
+   * stable than trying to infer from MiotState.
+   */
+  TASK_PROGRESS_PCT: { siid: 4, piid: 63 } as const,
+  /**
    * VERIFIED on r2532a 2026-05-02..03 — generic **device-activity
    * counter**. Resets to 0 at end-of-task (cleaning task summary
    * fires) and then increments roughly once per minute for as long as
@@ -877,6 +890,17 @@ export const VACUUM_ACTION = {
  * auto-empty, end-of-task drying):
  *
  *   1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 13, 14, 17, 18, 20, 22, 23, 28, 30
+ *
+ * **+2 more values verified live 2026-05-03** during a "greasy areas"
+ * targeted clean (~93 min):
+ *
+ *   - `20 (CleanMopRefillWater)` — re-confirmed; appeared during the
+ *     dock-side mop wash sub-cycle as a brief intermediate (`9 → 20 → 9`).
+ *   - `25 (SecondCleaning)` — common transitional hub state observed
+ *     between active cleaning and any dock excursion (re-pad, mop wash,
+ *     return-with-intent). Tasshack's `SecondCleaning` label fits the
+ *     observed semantics: "device is between phases of a task,
+ *     re-evaluating what to do next".
  *
  * Sub-mode discovery: **MiotState 1 vs 12 distinguishes vacuum-only
  * vs vacuum+mop cleaning** — the robot dynamically alternates per zone
