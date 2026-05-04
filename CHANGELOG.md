@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-04
+
+Live-MQTT subscription, action-call, and live-map ergonomics —
+all driven by the realisation that the cloud's HTTP code 80001
+("device offline") is misleading on healthy devices and was poisoning
+both the lib's error model and consumer code that tried to wait for
+"the subscription to come alive."
+
+### Added
+
+- **`Vacuum.verifyMqtt(opts?)`** — first-class "is my subscription
+  actually receiving pushes?" check. Issues a no-op `VOLUME` write and
+  waits for the broker to echo it back as `properties_changed`. Returns
+  a `VerifyMqttResult` discriminated by `reason`: `"ok"` / `"no-echo"` /
+  `"not-watching"`. The MQTT echo is treated as the source of truth —
+  HTTP code 80001 from the trigger write is **ignored**, because it's a
+  false negative on healthy devices (see Changed below). Replaces the
+  previous "stare at the empty event stream and hope" pattern for
+  verifying a subscription is alive.
+- **`MapManager.requestIFrame(opts?)`** — convenience wrapper around the
+  internal frame requester. Consumers no longer need to import the
+  standalone `requestIFrame(client, did)` helper just to provoke a fresh
+  I-frame from the map manager they already have.
+- **`MapManager.whenReady(timeoutMs?)`** — Promise that resolves with
+  the next decoded `MapData`, kicking `requestIFrame()` to bootstrap if
+  no map is current yet. Auto-calls `start()` (idempotent). Default
+  timeout 30000ms; pass `0` to wait indefinitely. Live-channel only —
+  the docstring directs static "give me the current floor plan" use
+  cases at `Vacuum.fetchSavedMapList()` instead.
+- **`examples/probe-mqtt-verify.ts`** — thin wrapper around
+  `Vacuum.verifyMqtt()` for one-shot diagnostics from the command line.
+  Also dumps the raw `getDevices` JSON for the first device.
+
+### Changed
+
+- **`Vacuum.fetchSavedMapList()` tolerates 80001.** When the cloud
+  returns 80001 for the underlying pointer read, the method now folds
+  that into the same `null` outcome as "no pointer published yet"
+  rather than throwing. This makes it a safe fallback for the static-
+  floor-plan use case the README points at, even when the device is
+  unresponsive.
+- **`DreameDeviceOfflineError` reinterpreted.** The class name is kept
+  for legibility against the wire-level literal `msg`, but its JSDoc
+  now documents that code 80001 does NOT mean the device is offline.
+  Verified live 2026-05-04 against a Dreame X50: `vacuum.start()`,
+  `vacuum.dock()`, `vacuum.cancelCurrentJob()`, `setProperties`, and
+  `getProperties` all returned 80001 from the HTTP layer while the
+  device was simultaneously executing the actions and echoing state
+  changes back over MQTT. 80001 actually means "the cloud's HTTP-side
+  ACK waiter timed out after ~8s" — the action may well have been
+  delivered. The MQTT subscription is the source of truth for
+  device-side response. `Vacuum.verifyMqtt()` and
+  `MapManager.whenReady()` both swallow 80001 from their trigger
+  actions for this reason; consumers writing custom round-trips should
+  do the same.
+
 ## [0.1.3] - 2026-05-03
 
 Post-release code-review pass plus a Node-engine bump to current LTS.

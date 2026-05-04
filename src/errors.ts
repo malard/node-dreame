@@ -26,20 +26,35 @@ export class DreameApiError extends DreameError {
 
 /**
  * Thrown when the cloud returns code 80001 ("device may be offline,
- * command sending timed out"). Means the cloud accepted the request but
- * the device didn't ACK within the broker timeout — typically because
- * the device is rebooting (post-OTA) or its MQTT subscription is down.
+ * command sending timed out"). The literal `msg` field claims the
+ * device is offline — that interpretation is **frequently wrong**.
  *
- * Catch this specifically to distinguish "device unreachable right now"
- * from real protocol errors:
+ * What 80001 actually means: the cloud's HTTP-side waiter for the
+ * device's MQTT-side ACK gave up after ~8 seconds. It does NOT mean
+ * the action failed to reach the device, and it does NOT mean the
+ * device is unreachable. Verified live 2026-05-04 on a Dreame X50:
+ * `vacuum.start()`, `vacuum.dock()`, `vacuum.cancelCurrentJob()`,
+ * `setProperties`, and `getProperties` all returned 80001 from the
+ * HTTP layer while the device was simultaneously executing the actions
+ * AND echoing state changes back over MQTT. The 80001 is a false
+ * negative on a healthy device that just happens to take >8s to ACK.
  *
- * ```ts
- * try {
- *   await vacuum.locate();
- * } catch (e) {
- *   if (e instanceof DreameDeviceOfflineError) { … }
- * }
- * ```
+ * Practical implication: do NOT treat this error as authoritative
+ * about device reachability. The MQTT subscription is the source of
+ * truth — observe the device's response there. If you need a yes/no
+ * "is the device responsive" answer, use `Vacuum.verifyMqtt()`, which
+ * judges purely on whether an MQTT echo arrives (and ignores 80001
+ * from the trigger write).
+ *
+ * The only case where 80001 is a true positive is when the device
+ * actually IS unreachable (powered off, network lost, mid-reboot). In
+ * that case no echo will arrive on MQTT either — that's the
+ * disambiguation.
+ *
+ * The class name and `kind: "offline"` discriminator on
+ * `Vacuum.refresh()` are kept for legibility against the wire-level
+ * literal `msg` field, but consumers should treat both as
+ * "ACK-timeout" in their internal modeling.
  */
 export class DreameDeviceOfflineError extends DreameApiError {
   constructor(message: string, status: number, body?: unknown) {

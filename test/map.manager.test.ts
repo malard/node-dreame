@@ -431,3 +431,79 @@ describe("MapManager: plumbing", () => {
     expect(mgr.pendingCount).toBe(0);
   });
 });
+
+// ─── convenience methods ───────────────────────────────────────────
+
+describe("MapManager: convenience methods", () => {
+  it("requestIFrame() proxies to the frame requester", async () => {
+    const { mgr, calls } = makeManager({ ossFetcher: neverFetcher() });
+    await mgr.requestIFrame();
+    expect(calls).toEqual([{ kind: "I", opts: undefined }]);
+  });
+
+  it("requestIFrame() forwards options through", async () => {
+    const { mgr, calls } = makeManager({ ossFetcher: neverFetcher() });
+    await mgr.requestIFrame({ force: false, startTime: 1234 });
+    expect(calls).toEqual([{ kind: "I", opts: { force: false, startTime: 1234 } }]);
+  });
+
+  it("whenReady() resolves immediately with the current map when one is already decoded", async () => {
+    const { mgr, source } = makeManager({ ossFetcher: neverFetcher() });
+    mgr.start();
+    pushProp(source, 1, wrapEnvelope(buildFrame({ frameId: 50, frameType: "I" })));
+    const data = await mgr.whenReady();
+    expect(data.frameId).toBe(50);
+  });
+
+  it("whenReady() kicks requestIFrame and resolves on the resulting map push", async () => {
+    const { mgr, source, calls } = makeManager({ ossFetcher: neverFetcher() });
+    const ready = mgr.whenReady(2000);
+    // The kick fires synchronously inside whenReady — verify before any push.
+    await new Promise((r) => setImmediate(r));
+    expect(calls).toEqual([{ kind: "I", opts: undefined }]);
+    // Simulate the device responding with the requested I-frame.
+    pushProp(source, 1, wrapEnvelope(buildFrame({ frameId: 77, frameType: "I" })));
+    const data = await ready;
+    expect(data.frameId).toBe(77);
+  });
+
+  it("whenReady() auto-calls start() so a never-started manager still receives the kicked frame", async () => {
+    const { mgr, source } = makeManager({ ossFetcher: neverFetcher() });
+    // Note: no mgr.start() called.
+    const ready = mgr.whenReady(2000);
+    await new Promise((r) => setImmediate(r));
+    pushProp(source, 1, wrapEnvelope(buildFrame({ frameId: 88, frameType: "I" })));
+    const data = await ready;
+    expect(data.frameId).toBe(88);
+  });
+
+  it("whenReady() rejects with a hint after the timeout when no map arrives", async () => {
+    const { mgr } = makeManager({ ossFetcher: neverFetcher() });
+    await expect(mgr.whenReady(20)).rejects.toThrow(/no map within 20ms/);
+  });
+
+  it("whenReady() does not reject just because requestIFrame fails — surfaces via 'error' instead", async () => {
+    const source = new EventEmitter();
+    const requester: FrameRequester = {
+      requestIFrame: async () => {
+        throw new Error("device offline");
+      },
+      requestPFrame: async () => ({ code: 0 }),
+    };
+    const mgr = new MapManager({
+      source,
+      did: DID,
+      ossFetcher: neverFetcher(),
+      ossInput: OSS_INPUT,
+      frameRequester: requester,
+    });
+    const errors: Error[] = [];
+    mgr.on("error", (e) => errors.push(e));
+    const ready = mgr.whenReady(50);
+    // The kick rejects — error surfaces on 'error' but `ready` is still pending.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(errors.map((e) => e.message)).toEqual(["device offline"]);
+    // …and the timeout still drives final rejection.
+    await expect(ready).rejects.toThrow(/no map within 50ms/);
+  });
+});

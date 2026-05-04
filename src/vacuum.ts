@@ -90,6 +90,29 @@ export type RefreshResult =
   | { kind: "offline"; state: VacuumState };
 
 /**
+ * Outcome of `Vacuum.verifyMqtt()`. Discriminated by `reason`.
+ *
+ * - `"ok"` — the broker echoed our trigger write back as a
+ *   `properties_changed` push within the timeout. The MQTT push
+ *   channel is healthy and live state pushes will flow whenever the
+ *   device decides to push them.
+ * - `"no-echo"` — no `properties_changed` echo arrived within the
+ *   timeout. Either the device is genuinely unreachable (powered off,
+ *   network lost, mid-reboot), or it's responsive but didn't generate
+ *   an echo for the no-op write (rare). Try again, or extend
+ *   `timeoutMs`. The HTTP-layer code 80001 ("device offline") is
+ *   IGNORED here — that error is misleading on a healthy device (see
+ *   `DreameDeviceOfflineError` for why) and would produce false
+ *   negatives if used as the verify signal.
+ * - `"not-watching"` — `vacuum.watch()` wasn't called first, so there
+ *   is no subscription to verify against. Call `watch()` and retry.
+ */
+export type VerifyMqttResult =
+  | { reason: "ok"; echoMs: number; echoCount: number }
+  | { reason: "no-echo"; echoMs: null; echoCount: number }
+  | { reason: "not-watching"; echoMs: null; echoCount: 0 };
+
+/**
  * Cumulative lifetime stats from the device's totals service (siid 12).
  * Returned by `Vacuum.fetchTotals()`.
  */
@@ -287,6 +310,88 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     this.#subscription.on("connect", () => this.#setOnline(true));
     this.#subscription.on("close", () => this.#setOnline(false));
     this.#subscription.on("error", (err) => this.emit("error", err));
+  }
+
+  /**
+   * Actively verify that the MQTT subscription is receiving pushes.
+   *
+   * The MQTT subscription is an inherently passive channel — the device
+   * only pushes when state changes. If you call `watch()` and then sit
+   * waiting for events, you may see nothing for minutes at a time on a
+   * quiet device, with no way to tell whether your subscription is
+   * working or just waiting. This method removes the ambiguity: it
+   * issues a no-op `VOLUME` write back to the current value, then
+   * waits for the broker to echo it back as `properties_changed`.
+   *
+   * **The MQTT echo is the source of truth.** The HTTP layer's
+   * code 80001 (`DreameDeviceOfflineError`) is misleading on a healthy
+   * device — actions return 80001 even while the device is
+   * simultaneously executing them and echoing state back over MQTT
+   * (verified live 2026-05-04). This method therefore swallows any
+   * HTTP error from the trigger write and judges purely on echo
+   * arrival. If the device truly is offline, no echo will arrive and
+   * the result will be `"no-echo"` — but a returning echo is unambiguous.
+   *
+   * Requires `watch()` to have been called first; returns
+   * `"not-watching"` immediately otherwise. Default timeout 15000ms.
+   */
+  async verifyMqtt(opts: { timeoutMs?: number } = {}): Promise<VerifyMqttResult> {
+    const sub = this.#subscription;
+    if (!sub) {
+      return { reason: "not-watching", echoMs: null, echoCount: 0 };
+    }
+    const timeoutMs = opts.timeoutMs ?? 15000;
+    const start = Date.now();
+    let echoCount = 0;
+    let echoArrivedAt: number | null = null;
+    const echoPromise = new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        sub.off("properties", onProps);
+        resolve(false);
+      }, timeoutMs);
+      const onProps = (changes: PropertyChange[]) => {
+        echoCount += changes.length;
+        if (echoArrivedAt === null) {
+          echoArrivedAt = Date.now();
+        }
+        clearTimeout(timer);
+        sub.off("properties", onProps);
+        resolve(true);
+      };
+      sub.on("properties", onProps);
+    });
+
+    // Best-effort write a no-op VOLUME back to itself. Read first to get
+    // the current value; on either side, swallow HTTP errors — 80001
+    // does NOT mean the action failed (see `DreameDeviceOfflineError`),
+    // and the MQTT echo (or its absence) is what we actually care about.
+    let writeValue = 50;
+    try {
+      const reads = await this.#client.getProperties(this.device.did, [SETTINGS_PROP.VOLUME]);
+      const cur = reads[0];
+      if (cur && cur.code === 0 && typeof cur.value === "number") {
+        writeValue = cur.value;
+      }
+    } catch (err) {
+      if (!(err instanceof DreameDeviceOfflineError)) {
+        throw err;
+      }
+    }
+    try {
+      await this.#client.setProperties(this.device.did, [
+        { ...SETTINGS_PROP.VOLUME, value: writeValue },
+      ]);
+    } catch (err) {
+      if (!(err instanceof DreameDeviceOfflineError)) {
+        throw err;
+      }
+    }
+
+    const ok = await echoPromise;
+    if (ok && echoArrivedAt !== null) {
+      return { reason: "ok", echoMs: echoArrivedAt - start, echoCount };
+    }
+    return { reason: "no-echo", echoMs: null, echoCount };
   }
 
   async unwatch(): Promise<void> {
@@ -579,14 +684,25 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    *
    * Resolves to `null` when the device hasn't published a `MAP_LIST`
    * pointer yet (typical until the user does at least one cleaning
-   * task that gets saved).
+   * task that gets saved), and ALSO when the cloud returns 80001 for
+   * the pointer read — the device is unresponsive right now and we
+   * have no pointer to chase, but per `DreameDeviceOfflineError` 80001
+   * is a soft signal so we don't surface it as a thrown error here.
    */
   async fetchSavedMapList(opts: CallOptions = {}): Promise<MapSavedList | null> {
-    const pointerResults = await this.#client.getProperties(
-      this.device.did,
-      [CLOUD_OBJ_PROP.POINTER_JSON],
-      opts,
-    );
+    let pointerResults;
+    try {
+      pointerResults = await this.#client.getProperties(
+        this.device.did,
+        [CLOUD_OBJ_PROP.POINTER_JSON],
+        opts,
+      );
+    } catch (err) {
+      if (err instanceof DreameDeviceOfflineError) {
+        return null;
+      }
+      throw err;
+    }
     const pointer = pointerResults[0];
     if (!pointer || pointer.code !== 0 || typeof pointer.value !== "string" || !pointer.value) {
       return null;

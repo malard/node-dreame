@@ -41,6 +41,7 @@ import type { EventEmitter } from "node:events";
 import type { PropertyChange } from "../mqtt.js";
 import type { DreameLogger } from "../types.js";
 import { CLOUD_OBJ_PROP } from "../miot-spec.js";
+import { DreameDeviceOfflineError } from "../errors.js";
 import { TypedEmitter } from "../typed-emitter.js";
 import {
   MapDecodeError,
@@ -204,6 +205,87 @@ export class MapManager extends TypedEmitter<MapManagerEvents> {
     this.#current = null;
     this.#lastIFrameObjName = null;
     this.#pending.clear();
+  }
+
+  /**
+   * Ask the device to push a fresh I-frame on the live `MAP_DATA` channel.
+   * Convenience wrapper around the internal `frameRequester` so consumers
+   * don't have to import `requestIFrame` and plumb the client/did pair.
+   *
+   * Resolves to the cloud's raw action result. The actual frame arrives
+   * later via the existing MQTT subscription — listen on `'map'` for it,
+   * or use `whenReady()` to wait for it inline.
+   */
+  requestIFrame(opts?: RequestIFrameOptions): Promise<unknown> {
+    return Promise.resolve(this.#frameRequester.requestIFrame(opts));
+  }
+
+  /**
+   * Wait for the next `'map'` emit and resolve with the decoded `MapData`.
+   * Kicks `requestIFrame()` to provoke a fresh push if no map is current
+   * yet. Auto-calls `start()` first (idempotent). Resolves immediately
+   * with `current` if a map has already been decoded.
+   *
+   * **This is the LIVE-channel API.** It only resolves when the device
+   * actually pushes a frame on the MQTT channel — which it reliably
+   * does during a cleaning task (every state change emits PATH /
+   * inline frames), and unreliably when docked and idle (the device
+   * may not push in response to `requestIFrame` if it has nothing
+   * fresh to send). For "give me the static current floor plan even
+   * when nothing is happening" use `Vacuum.fetchSavedMapList()`
+   * instead — that path doesn't depend on the device pushing anything.
+   *
+   * @param timeoutMs reject after this many ms if no map arrives. Default
+   *                  30000. Pass `0` to wait indefinitely. The reject
+   *                  message points at `Vacuum.verifyMqtt()` to help
+   *                  disambiguate why no frame arrived.
+   */
+  whenReady(timeoutMs: number = 30000): Promise<MapData> {
+    if (this.#current) {
+      return Promise.resolve(this.#current);
+    }
+    this.start();
+    return new Promise<MapData>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const onMap = (data: MapData): void => {
+        cleanup();
+        resolve(data);
+      };
+      const cleanup = (): void => {
+        this.off("map", onMap);
+        if (timer) {
+          clearTimeout(timer);
+        }
+      };
+      this.on("map", onMap);
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          cleanup();
+          reject(
+            new Error(
+              `MapManager.whenReady: no map within ${timeoutMs}ms. ` +
+                `Use Vacuum.verifyMqtt() to distinguish "subscription healthy but ` +
+                `device quiet" from "device unreachable" from "subscription not ` +
+                `delivering pushes" — the MQTT channel is passive, so a quiet ` +
+                `window is indistinguishable from a broken one without an ` +
+                `explicit round-trip.`,
+            ),
+          );
+        }, timeoutMs);
+      }
+      // Bootstrap: ask the device to push a fresh I-frame. Swallow
+      // 80001 — the cloud's HTTP-side ACK waiter often times out even
+      // while the device is executing the action and its response is
+      // already in flight on MQTT (see `DreameDeviceOfflineError`).
+      // Other errors are surfaced via `'error'`. The timeout drives
+      // final rejection if no map ever arrives.
+      void Promise.resolve(this.#frameRequester.requestIFrame()).catch((err) => {
+        if (err instanceof DreameDeviceOfflineError) {
+          return;
+        }
+        this.#emitError(err);
+      });
+    });
   }
 
   // ── push routing ────────────────────────────────────────────────────

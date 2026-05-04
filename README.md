@@ -62,6 +62,41 @@ CommonJS:
 const { DreameClient } = require("node-dreame");
 ```
 
+## Live updates over MQTT
+
+Open an MQTT subscription to receive `properties_changed`, OTA progress, task-complete events, and live-map frames as the device pushes them:
+
+```ts
+await vacuum.watch();
+vacuum.on("change", (state) => console.log(state));
+vacuum.on("taskComplete", (record) => console.log("done:", record));
+```
+
+The MQTT channel is **passive** — the device only pushes when state changes, so a quiet idle window can look indistinguishable from a broken subscription. Use the first-class verifier to remove the ambiguity:
+
+```ts
+const r = await vacuum.verifyMqtt();
+if (r.reason !== "ok") { console.error("subscription not healthy:", r.reason); }
+```
+
+`r.reason` discriminates: `"ok"` (broker echoed our trigger write back), `"no-echo"` (no echo within timeout — device may be genuinely unreachable or just unresponsive to the no-op), `"not-watching"` (`watch()` wasn't called). The MQTT echo is the source of truth — the HTTP layer's code 80001 ("device offline") is **ignored** because it's a false negative on healthy devices (the cloud's HTTP-side ACK waiter often times out while the device is actually executing the action and echoing state back over MQTT — see `DreameDeviceOfflineError` for details).
+
+For the live-map case during an active cleaning task, don't sit waiting for the first `'map'` event — actively provoke one:
+
+```ts
+const data = await vacuum.map.whenReady();   // live channel, resolves on next push
+```
+
+`whenReady(timeoutMs?)` resolves with the next decoded `MapData`, kicking `requestIFrame()` to bootstrap. Default timeout 30000ms. The same `vacuum.map` exposes `requestIFrame(opts?)` directly when you need the underlying action without the wait.
+
+For a **static floor plan** (when the device is idle on the dock and won't push live frames), use the saved-map path instead — it doesn't depend on the device pushing anything:
+
+```ts
+const list = await vacuum.fetchSavedMapList();
+const active = list?.maps.find((m) => m.mapId === list.activeMapId);
+const data = active?.data;   // a full MapData for the current floor
+```
+
 ## Building a web app on top of node-dreame
 
 node-dreame runs in a Node.js process and emits events. If you want a
