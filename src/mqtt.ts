@@ -55,6 +55,30 @@ export interface OtaEvent {
 }
 
 /**
+ * Saved-map catalogue push on `method: "_sync.update_vacuum_mapinfo"`.
+ * The device emits this when something causes its saved-map state to
+ * be re-announced — typically when the Dreamehome app opens the
+ * device. Wire shape:
+ *
+ *   `{ map_info: "{<mapId>: [<int>, ...], ...}" }`
+ *
+ * `params.map_info` is a JSON-encoded string (yes, doubly-encoded);
+ * we parse it into a `Map<number, readonly number[]>` so the
+ * mapId-as-string key becomes a real numeric key. The inner `[5,10]`
+ * vs `[0]` payload meaning is not yet decoded — observed once on
+ * r2532a 2026-05-06 with `[5,10]` for one map and `[0]` for the
+ * rest, suggestive of `[active_flag, ?]` or `[version, count]`.
+ * Surfaced raw so consumers can experiment.
+ *
+ * Subscribe via `DreameSubscription.on('mapInfo', cb)`.
+ */
+export interface MapInfoPush {
+  did: string;
+  /** Parsed `map_info` keyed by numeric `mapId`. */
+  maps: Map<number, readonly number[]>;
+}
+
+/**
  * MIoT event push (`method: "event_occured"`, with the typo) — the
  * MIoT-defined event-bus channel for things that aren't property
  * changes. Verified live on r2532a 2026-05-03 — three distinct events
@@ -112,6 +136,8 @@ interface SubscriptionInput {
  *   `info`           (InfoPush)          — one event per `_otc.info` push (typed)
  *   `ota`            (OtaEvent)          — convenience: extracted from `props` when
  *                                          params contains ota_state or ota_progress
+ *   `mapInfo`        (MapInfoPush)       — one event per `_sync.update_vacuum_mapinfo`
+ *                                          push: the saved-map catalogue
  *   `message`        (RawMqttEvent)      — the raw envelope, for low-level inspection
  *   `connect`        ()                  — when the underlying broker connects
  *   `close`          ()                  — when the connection drops
@@ -141,6 +167,7 @@ export type DreameSubscriptionEvents = {
   props: [PropsPush];
   info: [InfoPush];
   ota: [OtaEvent];
+  mapInfo: [MapInfoPush];
   message: [RawMqttEvent];
   connect: [];
   close: [];
@@ -307,6 +334,19 @@ export class DreameSubscription extends TypedEmitter<DreameSubscriptionEvents> {
       this.emit("info", parseInfoPush(did, params as Record<string, unknown>));
       return;
     }
+
+    if (
+      method === "_sync.update_vacuum_mapinfo" &&
+      params &&
+      typeof params === "object" &&
+      !Array.isArray(params)
+    ) {
+      const push = parseMapInfo(did, params as Record<string, unknown>);
+      if (push) {
+        this.emit("mapInfo", push);
+      }
+      return;
+    }
   }
 }
 
@@ -343,6 +383,54 @@ export function parseEventOccured(
     siid,
     eiid,
     arguments: Array.isArray(args) ? args : [],
+  };
+}
+
+/**
+ * Parse the doubly-JSON-encoded `map_info` payload from
+ * `_sync.update_vacuum_mapinfo`. Returns `null` if the outer or
+ * inner JSON shape is unparseable — silent drop is preferred to a
+ * thrown error here so a single malformed push doesn't kill the
+ * whole subscription.
+ */
+export function parseMapInfo(
+  fallbackDid: string,
+  params: Record<string, unknown>,
+): MapInfoPush | null {
+  const inner = params["map_info"];
+  if (typeof inner !== "string") {
+    return null;
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(inner);
+  } catch {
+    return null;
+  }
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+    return null;
+  }
+  const maps = new Map<number, readonly number[]>();
+  for (const [key, value] of Object.entries(decoded as Record<string, unknown>)) {
+    const id = Number(key);
+    if (!Number.isFinite(id)) {
+      continue;
+    }
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    const ints: number[] = [];
+    for (const v of value) {
+      if (typeof v === "number") {
+        ints.push(v);
+      }
+    }
+    maps.set(id, ints);
+  }
+  const did = params["did"];
+  return {
+    did: typeof did === "string" || typeof did === "number" ? String(did) : fallbackDid,
+    maps,
   };
 }
 

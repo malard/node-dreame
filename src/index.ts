@@ -27,6 +27,7 @@ export type {
   InfoPush,
   OtaEvent,
   EventOccuredPush,
+  MapInfoPush,
   RawMqttEvent,
 } from "./mqtt.js";
 export { Vacuum } from "./vacuum.js";
@@ -36,6 +37,8 @@ export type {
   CleanOpts,
   CleaningHistoryRecord,
   RefreshResult,
+  ActionResult,
+  VerifyMqttResult,
 } from "./vacuum.js";
 export {
   MiotState,

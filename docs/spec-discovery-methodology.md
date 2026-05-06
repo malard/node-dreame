@@ -41,8 +41,8 @@ multiple toggles to disambiguate by elimination.
 | 4.40 | `DRYING_TIME` | enum 2/3/4 | Hours; bounded enum. |
 | 4.46 | `MOP_WASH_WATER_LEVEL` | enum 0/1/2 | WaterSaving/Standard/Deep. |
 | 4.50 | `FEATURE_CONFIG_JSON` | json-string | Full settings panel mirror — see below. |
-| 4.56 | `DETERGENT_DOSAGE_INT` | int | Co-fires with detergent toggle. |
-| 4.57 | `DETERGENT_DOSAGE_STR` | string | String-typed twin of 4.56. |
+| 4.56 | `NUMERIC_MESSAGE_PROMPT` | int | Generic numeric notification channel for the device home page. The synchronous firing seen when toggling detergent dosage was coincidental message traffic, not the dosage value (corrected 2026-05-06 against Tasshack). |
+| 4.57 | `MESSAGE_PROMPT` | string | Generic string notification channel — string-typed twin of 4.56. |
 | 4.61 | `WASHBOARD.COUNTDOWN_SECS` | int | 1Hz live countdown during dock cleaning. |
 | 4.7  | `VACUUM.STEP_INDICATOR` | int | General task-step indicator. Values 1/6/16/25/26 catalogued (active / post-clean idle / intermediate / mop-install attempt / mop-remove). |
 | 4.64 | `VACUUM.TASK_RESET_COUNTER` | int | Task-sequence counter; resets to 0 at task end. (Originally misnamed `SCHEDULE.EDIT_COUNTER` — disproved by the end-of-task reset captured 2026-05-02.) |

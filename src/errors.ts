@@ -51,10 +51,11 @@ export class DreameApiError extends DreameError {
  * that case no echo will arrive on MQTT either — that's the
  * disambiguation.
  *
- * The class name and `kind: "offline"` discriminator on
- * `Vacuum.refresh()` are kept for legibility against the wire-level
- * literal `msg` field, but consumers should treat both as
- * "ACK-timeout" in their internal modeling.
+ * The class name is kept for legibility against the wire-level
+ * literal `msg` field, but consumers should treat it as "HTTP-side
+ * ACK timeout" in their internal modeling — never as proof of
+ * offline. `Vacuum.refresh()` surfaces this same outcome as
+ * `kind: "no-ack"`.
  */
 export class DreameDeviceOfflineError extends DreameApiError {
   constructor(message: string, status: number, body?: unknown) {

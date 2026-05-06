@@ -52,8 +52,11 @@ if (vacuum.capabilities.canMop) {
   console.log("Mop supported. Water levels:", vacuum.capabilities.supportedWaterVolumes);
 }
 
-await vacuum.refresh();
-await vacuum.locate();
+const refresh = await vacuum.refresh();
+if (refresh.kind === "no-ack") { console.warn("cloud HTTP read timed out; cached state may be stale"); }
+
+const locate = await vacuum.locate();
+if (locate.kind === "no-ack") { console.warn("locate may still have fired; watch MQTT to confirm"); }
 ```
 
 CommonJS:
@@ -81,6 +84,29 @@ if (r.reason !== "ok") { console.error("subscription not healthy:", r.reason); }
 
 `r.reason` discriminates: `"ok"` (broker echoed our trigger write back), `"no-echo"` (no echo within timeout — device may be genuinely unreachable or just unresponsive to the no-op), `"not-watching"` (`watch()` wasn't called). The MQTT echo is the source of truth — the HTTP layer's code 80001 ("device offline") is **ignored** because it's a false negative on healthy devices (the cloud's HTTP-side ACK waiter often times out while the device is actually executing the action and echoing state back over MQTT — see `DreameDeviceOfflineError` for details).
 
+### `vacuum.state` populates from two sources
+
+`vacuum.state` is the cached snapshot exposed through `state` and the `'change'` event. It populates from:
+
+1. **`refresh()` returning `kind: "acked"`** — seeds every tracked field in one HTTP round-trip. When the cloud returns 80001 (`refresh()` resolves to `kind: "no-ack"`), no seeding happens; fields stay where they were.
+2. **MQTT `properties_changed` pushes** — the device emits these on every state change after `watch()`. Each push patches one or more fields. On a quiet idle device (charging on the dock, no errors) push rate can sit at zero for minutes.
+
+Practical consequence: don't assume `state` is fully populated immediately after `watch()`. Treat the `'change'` event as the source of truth and re-render whenever it fires. Call `refresh()` opportunistically — when it acks you get a full snapshot, when it no-acks you've lost nothing.
+
+If you need a populated `state` *now* and `refresh()` no-acks, there is no library-side workaround today: the Dreamehome cloud exposes `/device/sendCommand` as the only read path, and that's the call returning 80001. We've gathered enough to document the behaviour but not enough to bypass it; an APK-decompile pass on the Dreamehome mobile app is the next investigation step. The `examples/probe-state-on-80001.ts` probe captures whatever the broker / cloud will surface to a passive observer in this state, for that future investigation.
+
+### Action calls return `ActionResult` instead of throwing on 80001
+
+Every action and settings method on `Vacuum` (`start`, `dock`, `pause`, `stop`, `locate`, `clearWarning`, `startAutoEmpty`, `cleanSegments` / `cleanZones` / `cleanSpot`, `resume` / `cancelCurrentJob` / `goHome`, `setSuction` / `setWaterVolume` / `setCleaningMode` / `setVolume` / `setSettings`) returns `Promise<ActionResult>`:
+
+```ts
+type ActionResult<T = unknown> =
+  | { kind: "acked"; value: T }
+  | { kind: "no-ack" };
+```
+
+When the cloud responds normally you get `{ kind: "acked", value }`; when the cloud returns 80001 you get `{ kind: "no-ack" }`. **`"no-ack"` does not mean the action failed** — the device often executes the action anyway and echoes the resulting state changes back over MQTT. Treat it as "watch MQTT to confirm" rather than as an error. Non-80001 errors (network, auth, malformed response) still throw and need caller attention.
+
 For the live-map case during an active cleaning task, don't sit waiting for the first `'map'` event — actively provoke one:
 
 ```ts
@@ -89,13 +115,34 @@ const data = await vacuum.map.whenReady();   // live channel, resolves on next p
 
 `whenReady(timeoutMs?)` resolves with the next decoded `MapData`, kicking `requestIFrame()` to bootstrap. Default timeout 30000ms. The same `vacuum.map` exposes `requestIFrame(opts?)` directly when you need the underlying action without the wait.
 
-For a **static floor plan** (when the device is idle on the dock and won't push live frames), use the saved-map path instead — it doesn't depend on the device pushing anything:
+### Getting a current floor plan
+
+For "give me the current floor plan as a single `MapData`" — segments, walls, dock, robot pose, the lot — there are two paths, with different trade-offs:
 
 ```ts
+// Path 1 (recommended for single-floor homes): MQTT-driven, no HTTP dependency.
+const data = await vacuum.fetchCurrentMap();
+
+// Path 2: multi-floor metadata (named floors, angles, active-map pointer).
 const list = await vacuum.fetchSavedMapList();
 const active = list?.maps.find((m) => m.mapId === list.activeMapId);
-const data = active?.data;   // a full MapData for the current floor
+const data2 = active?.data;
 ```
+
+`fetchCurrentMap()` is the path the **Dreamehome mobile app uses** when the cloud's HTTP path is timing out (probed live 2026-05-06): it watches MQTT for the device's PATH push, fetches the announced OSS object, and returns the decoded `MapData`. It opens a temporary subscription if `watch()` isn't already active, and closes it before resolving. Default timeout 30000ms; pass `0` to wait indefinitely.
+
+`fetchSavedMapList()` reads the per-floor catalogue via HTTP `getProperties` and is **frequently `null` on otherwise-healthy devices** because the cloud's HTTP-side ACK waiter times out (code 80001). Reach for it only when you specifically need per-floor names or the active-map pointer.
+
+If you want to know *which* maps the device has saved (multi-floor awareness without committing to the HTTP path), subscribe to the `'mapInfo'` event:
+
+```ts
+await vacuum.watch();
+vacuum.on("mapInfo", (push) => {
+  console.log("saved-map ids:", [...push.maps.keys()]);
+});
+```
+
+The Dreamehome cloud emits this on the device's `_sync.update_vacuum_mapinfo` MQTT method whenever its saved-map catalogue is re-announced — typically when the mobile app opens the device. Payload is a `Map<mapId, number[]>`; the inner array values are not yet fully decoded.
 
 ## Building a web app on top of node-dreame
 
@@ -118,9 +165,10 @@ to all connected clients with a tagged `{ type, data }` envelope.
 Live map streaming on its own (no server) is in
 [`examples/live-map-stream.ts`](./examples/live-map-stream.ts).
 
-The map shape (`MapData`) is documented in
-[`docs/live-map-roadmap.md`](./docs/live-map-roadmap.md). Coordinates
-are raw mm in the device's world frame — the browser does the
+The map shape (`MapData`) and the underlying binary format are
+documented in
+[`docs/live-map-format.md`](./docs/live-map-format.md). Coordinates
+are raw mm in the device's world frame — the consumer does the
 viewport transform.
 
 ## Supported devices

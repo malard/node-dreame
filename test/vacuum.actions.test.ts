@@ -12,6 +12,7 @@ import { Vacuum } from "../src/vacuum.js";
 import type { DreameClient } from "../src/client.js";
 import type { DreameDevice } from "../src/types.js";
 import type { MiotAction } from "../src/commands.js";
+import { DreameDeviceOfflineError } from "../src/errors.js";
 
 const DEVICE: DreameDevice = {
   did: "DID-1",
@@ -99,6 +100,52 @@ describe("Vacuum.cleanSpot", () => {
     const inJson = (calls[0]!.action.in as Array<{ piid: number; value: unknown }>)[1]!.value;
     expect(calls[0]!.action.in![0]).toEqual({ piid: 1, value: 20 });
     expect(JSON.parse(inJson as string)).toEqual({ points: [[1500, -2000, 2, 3, 1]] });
+  });
+});
+
+describe("Vacuum action ActionResult shape (80001 tolerance)", () => {
+  it("returns { kind: 'acked', value } when the cloud responds", async () => {
+    const { vacuum } = makeVacuum();
+    const result = await vacuum.locate();
+    expect(result).toEqual({ kind: "acked", value: { code: 0 } });
+  });
+
+  it("returns { kind: 'no-ack' } when the cloud returns 80001", async () => {
+    const client = {
+      callAction: async () => {
+        throw new DreameDeviceOfflineError("device offline: timeout", 200);
+      },
+    } as unknown as DreameClient;
+    const vacuum = new Vacuum(client, DEVICE);
+    const result = await vacuum.dock();
+    expect(result).toEqual({ kind: "no-ack" });
+  });
+
+  it("rethrows non-80001 errors instead of folding into no-ack", async () => {
+    const client = {
+      callAction: async () => {
+        throw new Error("network down");
+      },
+    } as unknown as DreameClient;
+    const vacuum = new Vacuum(client, DEVICE);
+    await expect(vacuum.start()).rejects.toThrow(/network down/);
+  });
+
+  it("setSettings short-circuits to acked-empty when no fields are passed", async () => {
+    const { vacuum } = makeVacuum();
+    const result = await vacuum.setSettings({});
+    expect(result).toEqual({ kind: "acked", value: [] });
+  });
+
+  it("setSuction routes through #tolerate80001 and folds 80001 to no-ack", async () => {
+    const client = {
+      setProperties: async () => {
+        throw new DreameDeviceOfflineError("device offline: timeout", 200);
+      },
+    } as unknown as DreameClient;
+    const vacuum = new Vacuum(client, DEVICE);
+    const result = await vacuum.setSuction(0);
+    expect(result).toEqual({ kind: "no-ack" });
   });
 });
 

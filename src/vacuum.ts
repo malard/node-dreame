@@ -4,6 +4,7 @@ import { TypedEmitter } from "./typed-emitter.js";
 import type {
   DreameSubscription,
   EventOccuredPush,
+  MapInfoPush,
   OtaEvent,
   PropertyChange,
 } from "./mqtt.js";
@@ -76,18 +77,46 @@ export { decodeSavedMapList } from "./vacuum/saved-maps.js";
  *   the START_CUSTOM dispatch path.
  */
 /**
- * Outcome of `Vacuum.refresh()`. Discriminated so callers can branch on
- * `result.kind` rather than inferring online-ness from `state.online`.
+ * Outcome of any `Vacuum` method that issues an HTTP-side action
+ * (start/dock/setSuction/etc.). Discriminated by whether the cloud's
+ * HTTP-side ACK arrived in time.
  *
- * - `"online"`: cloud round-trip succeeded; `state` reflects the latest
- *   property reads.
- * - `"offline"`: cloud returned `80001` (device didn't ACK within the
- *   broker timeout). `state` is the previous snapshot with `online`
- *   forced to `false` — likely stale.
+ * - `"acked"`: the cloud responded within the broker timeout. `value`
+ *   is the raw cloud response — usually irrelevant for actions, but
+ *   surfaced for the rare caller that needs it.
+ * - `"no-ack"`: the cloud returned `80001` (HTTP-side ACK waiter
+ *   timed out after ~8s). The action **may still have been delivered
+ *   and executed** by the device — 80001 is not proof of failure
+ *   (see `DreameDeviceOfflineError`). Watch the MQTT event stream
+ *   to confirm the device-side response.
+ *
+ * Any non-80001 error (network, auth, malformed response) bubbles up
+ * as a thrown error rather than collapsing into `"no-ack"` — those
+ * need caller attention.
+ */
+export type ActionResult<T = unknown> =
+  | { kind: "acked"; value: T }
+  | { kind: "no-ack" };
+
+/**
+ * Outcome of `Vacuum.refresh()`. Discriminated by whether the cloud's
+ * HTTP-side ACK arrived in time.
+ *
+ * - `"acked"`: the cloud round-trip completed and `state` reflects the
+ *   latest property reads. `state.online` is also bumped to `true` —
+ *   the HTTP ACK is fresh evidence the device is reachable.
+ * - `"no-ack"`: the cloud returned `80001` (HTTP-side ACK waiter timed
+ *   out after ~8s). The cached property values were not updated and
+ *   are likely stale. `state.online` is **left untouched** — 80001 is
+ *   NOT proof the device is offline (see `DreameDeviceOfflineError`),
+ *   so the MQTT-driven `online` flag stays authoritative. The device
+ *   may still be reachable; consumers should read MQTT echoes
+ *   (`Vacuum.verifyMqtt()`) to confirm liveness rather than treating
+ *   `"no-ack"` as offline.
  */
 export type RefreshResult =
-  | { kind: "online"; state: VacuumState }
-  | { kind: "offline"; state: VacuumState };
+  | { kind: "acked"; state: VacuumState }
+  | { kind: "no-ack"; state: VacuumState };
 
 /**
  * Outcome of `Vacuum.verifyMqtt()`. Discriminated by `reason`.
@@ -168,6 +197,7 @@ export type VacuumEvents = {
   change: [VacuumState];
   taskComplete: [CleaningHistoryRecord];
   ota: [OtaEvent];
+  mapInfo: [MapInfoPush];
   error: [Error];
 };
 
@@ -186,7 +216,33 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     this.device = device;
   }
 
-  /** Last-known device state. */
+  /**
+   * Last-known device state.
+   *
+   * Populated by two sources:
+   *
+   * 1. **`refresh()` returning `kind: "acked"`** — seeds every field
+   *    in one HTTP round-trip. This is the fastest way to a fully-
+   *    populated state, but it depends on the cloud's HTTP-side ACK
+   *    waiter not timing out (~8s). When the cloud returns 80001
+   *    (`refresh()` resolves to `kind: "no-ack"`), no seeding
+   *    happens — fields stay at whatever they were before the call.
+   *
+   * 2. **MQTT `properties_changed` pushes** — the device emits these
+   *    on every state change after `watch()` is called. They patch
+   *    individual fields as values move. On a quiet idle device the
+   *    push rate can be near zero, so a fresh subscription on a
+   *    docked-and-charging robot may sit with most fields `null`
+   *    for minutes.
+   *
+   * Practical implication for consumers: don't assume `state` is
+   * fully populated immediately after `watch()`. Treat the
+   * `'change'` event as the source of truth and re-render whenever
+   * it fires, rather than reading `state` synchronously and
+   * expecting non-null values across the board. Call `refresh()`
+   * opportunistically — when it acks, you get a full snapshot;
+   * when it no-acks, you've lost nothing.
+   */
   get state(): VacuumState {
     return { ...this.#state };
   }
@@ -213,14 +269,16 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * Pull all known properties once and update the cached state.
    *
    * Returns a `RefreshResult` discriminated by `kind`:
-   *   - `"online"` — cloud round-trip succeeded; `state` reflects the
-   *     latest property reads.
-   *   - `"offline"` — cloud returned `80001` (device didn't ACK within
-   *     the broker timeout). `state.online` is forced to `false` and
-   *     the cached property values are likely stale.
+   *   - `"acked"` — cloud round-trip completed; `state` reflects the
+   *     latest property reads and `state.online` is bumped to `true`.
+   *   - `"no-ack"` — cloud returned `80001` (HTTP-side ACK waiter
+   *     timed out after ~8s). The cached property values were not
+   *     updated. `state.online` is **left as it was** — 80001 is not
+   *     proof of an offline device (see `DreameDeviceOfflineError`),
+   *     so the MQTT-driven online flag stays authoritative.
    *
    * Any other error (network, auth, malformed response) bubbles up
-   * rather than being collapsed into the offline outcome — those need
+   * rather than being collapsed into the no-ack outcome — those need
    * caller attention, not a quiet retry.
    */
   async refresh(opts: CallOptions = {}): Promise<RefreshResult> {
@@ -241,7 +299,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       CONSUMABLE_PROP.SIDE_BRUSH_LEFT,
       CONSUMABLE_PROP.FILTER_LEFT,
     ];
-    let kind: "online" | "offline" = "online";
+    let kind: "acked" | "no-ack" = "acked";
     try {
       const results = await this.#client.getProperties(this.device.did, props, opts);
       for (const r of results) {
@@ -252,8 +310,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       this.#setOnline(true);
     } catch (err) {
       if (err instanceof DreameDeviceOfflineError) {
-        this.#setOnline(false);
-        kind = "offline";
+        kind = "no-ack";
       } else {
         throw err;
       }
@@ -307,6 +364,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
         }
       }
     });
+    this.#subscription.on("mapInfo", (push: MapInfoPush) => this.emit("mapInfo", push));
     this.#subscription.on("connect", () => this.#setOnline(true));
     this.#subscription.on("close", () => this.#setOnline(false));
     this.#subscription.on("error", (err) => this.emit("error", err));
@@ -458,9 +516,15 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
   /**
    * ASSUMED action mapping — would actually start cleaning, so not
    * fired during verification. Wire shape mirrors Tasshack.
+   *
+   * Resolves to an `ActionResult` — `"acked"` if the cloud responded,
+   * `"no-ack"` if the cloud returned 80001 (the device may still have
+   * executed the action; watch MQTT for confirmation).
    */
-  start(): Promise<unknown> {
-    return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.START, in: [] });
+  start(): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.START, in: [] }),
+    );
   }
 
   /**
@@ -468,16 +532,20 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * while idle). Behaviour during an active cleaning task — does it
    * actually pause? — still untested.
    */
-  pause(): Promise<unknown> {
-    return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.PAUSE, in: [] });
+  pause(): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.PAUSE, in: [] }),
+    );
   }
 
   /**
    * Wire VERIFIED on r2532a 2026-05-03 (returned code 0 when called
    * while idle). Behaviour during an active task still untested.
    */
-  stop(): Promise<unknown> {
-    return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.STOP, in: [] });
+  stop(): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.STOP, in: [] }),
+    );
   }
 
   /**
@@ -485,23 +553,31 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * docked — idempotent). Behaviour mid-task — does it actually
    * recall the robot? — still untested.
    */
-  dock(): Promise<unknown> {
-    return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.CHARGE, in: [] });
+  dock(): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.CHARGE, in: [] }),
+    );
   }
 
   /** VERIFIED on r2532a 2026-05-02 — robot beeps. */
-  locate(): Promise<unknown> {
-    return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.LOCATE, in: [] });
+  locate(): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.LOCATE, in: [] }),
+    );
   }
 
   /** VERIFIED on r2532a 2026-05-02 — returned code 0 with no warning to clear. */
-  clearWarning(): Promise<unknown> {
-    return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.CLEAR_WARNING, in: [] });
+  clearWarning(): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.CLEAR_WARNING, in: [] }),
+    );
   }
 
   /** ASSUMED action mapping — NOT YET verified on r2532a. */
-  startAutoEmpty(): Promise<unknown> {
-    return this.#client.callAction(this.device.did, { ...VACUUM_ACTION.START_AUTO_EMPTY, in: [] });
+  startAutoEmpty(): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.START_AUTO_EMPTY, in: [] }),
+    );
   }
 
   // ─── semantic action helpers ──────────────────────────────────────
@@ -530,7 +606,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * (the cancel landed during dock-side mop prep, before the robot
    * actually drove).
    */
-  cleanSegments(ids: number[], opts: CleanOpts = {}): Promise<unknown> {
+  cleanSegments(ids: number[], opts: CleanOpts = {}): Promise<ActionResult> {
     if (ids.length === 0) {
       throw new RangeError("cleanSegments: ids must not be empty");
     }
@@ -550,7 +626,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
   cleanZones(
     zones: Array<{ x0: number; y0: number; x1: number; y1: number }>,
     opts: CleanOpts = {},
-  ): Promise<unknown> {
+  ): Promise<ActionResult> {
     if (zones.length === 0) {
       throw new RangeError("cleanZones: zones must not be empty");
     }
@@ -574,24 +650,24 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * ASSUMED action mapping (Tasshack `START_CUSTOM` mode 20) — NOT YET
    * verified on r2532a.
    */
-  cleanSpot(point: { x: number; y: number }, opts: CleanOpts = {}): Promise<unknown> {
+  cleanSpot(point: { x: number; y: number }, opts: CleanOpts = {}): Promise<ActionResult> {
     const { repeats, fan, water } = this.#resolveCleanOpts(opts);
     const points = [[Math.round(point.x), Math.round(point.y), repeats, fan, water]];
     return this.#startCustom(CUSTOM_CLEAN_MODE.SPOT, { points });
   }
 
   /** Resume a paused cleaning job. Same wire call as `start()`. */
-  resume(): Promise<unknown> {
+  resume(): Promise<ActionResult> {
     return this.start();
   }
 
   /** Stop the current job (e.g. user pressed cancel). Same wire call as `stop()`. */
-  cancelCurrentJob(): Promise<unknown> {
+  cancelCurrentJob(): Promise<ActionResult> {
     return this.stop();
   }
 
   /** Send the robot back to its dock. Same wire call as `dock()`. */
-  goHome(): Promise<unknown> {
+  goHome(): Promise<ActionResult> {
     return this.dock();
   }
 
@@ -662,32 +738,82 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     return MapDecoder.decode(bytes.toString("utf8"));
   }
 
+  // ─── current map (MQTT-driven) ─────────────────────────────────────
+
+  /**
+   * Fetch the current-floor map data via the live MQTT channel, with
+   * lifecycle handled for you.
+   *
+   * This is the **MQTT-only path** — it doesn't depend on the cloud's
+   * HTTP-side ACK waiter completing in time. Probed live on r2532a
+   * 2026-05-06: when the Dreamehome cloud is in the 80001-from-HTTP
+   * state (so `fetchSavedMapList()` returns `null`), the Dreamehome
+   * mobile app gets the current floor plan via this same path —
+   * watching MQTT for `siid 6 piid 3` (PATH) push, then fetching the
+   * announced OSS object. `fetchCurrentMap()` exercises that path
+   * directly so consumers don't have to.
+   *
+   * Lifecycle: if `watch()` is already active the existing
+   * subscription is reused and left open. Otherwise a temporary
+   * subscription is opened, the I-frame is fetched, and the
+   * subscription is closed before resolving.
+   *
+   * Default timeout: 30000ms (matches `MapManager.whenReady`). Pass
+   * `0` to wait indefinitely. Rejects with a clear error if the
+   * device doesn't push a frame within the window — that case
+   * typically means the device is genuinely unreachable (powered
+   * off, mid-reboot), not just HTTP-slow.
+   *
+   * For multi-floor metadata (named maps, angles, the active-map
+   * pointer) use `fetchSavedMapList()` instead — that path requires
+   * the cloud's HTTP read to succeed.
+   */
+  async fetchCurrentMap(timeoutMs?: number): Promise<MapData> {
+    const wasWatching = this.#subscription !== null;
+    if (!wasWatching) {
+      await this.watch();
+    }
+    try {
+      return await this.map.whenReady(timeoutMs);
+    } finally {
+      if (!wasWatching) {
+        await this.unwatch();
+      }
+    }
+  }
+
   // ─── saved maps ────────────────────────────────────────────────────
 
   /**
-   * Fetch the device's saved-map list (all stored floors plus a
-   * pointer to the currently-active one).
+   * Fetch the device's saved-map list — multi-floor metadata
+   * (named maps, rotation angles, active-map pointer) plus the
+   * decoded `MapData` for each.
    *
    * Reads the OSS pointer from `siid 6 piid 8` (`MAP_LIST` /
-   * `POINTER_JSON`) — a JSON `{object_name, md5}` — fetches the OSS blob
+   * `POINTER_JSON`) via HTTP `getProperties`, fetches the OSS blob
    * via `OssFetcher`, parses the wrapper JSON, and decodes each
-   * inner saved-map blob via `MapDecoder`.
-   *
-   * **Wire-format ASSUMED** from Tasshack's Mi-cloud reference
-   * (`dev` `map.py:1078-1115`):
+   * inner saved-map blob via `MapDecoder`. Wrapper shape
+   * (`map.py:1078-1115`):
    *   `{ mapstr: [{ map: "<base64>", name?, angle? }, ...], curr_id: <id> }`
    *
-   * Verify against the live Dreame native cloud by running
-   * `examples/probe-saved-maps.ts` and comparing — the wrapper key
-   * names (`mapstr`, `curr_id`) and the inner `map`/`name`/`angle`
-   * fields may differ on the Dreame side.
+   * **This method depends on the cloud's HTTP path** and frequently
+   * returns `null` when the cloud's HTTP-side ACK waiter times out
+   * (code 80001). The Dreamehome mobile app does NOT use this path
+   * for rendering the current floor — it reads the live I-frame
+   * over MQTT instead. **Single-floor consumers should prefer
+   * `fetchCurrentMap()`**, which is MQTT-driven and works whether
+   * or not the HTTP path is responsive. Reach for
+   * `fetchSavedMapList()` only when you specifically need
+   * per-floor names or the active-map pointer — i.e. for a
+   * multi-floor home.
    *
-   * Resolves to `null` when the device hasn't published a `MAP_LIST`
-   * pointer yet (typical until the user does at least one cleaning
-   * task that gets saved), and ALSO when the cloud returns 80001 for
-   * the pointer read — the device is unresponsive right now and we
-   * have no pointer to chase, but per `DreameDeviceOfflineError` 80001
-   * is a soft signal so we don't surface it as a thrown error here.
+   * Resolves to `null` when:
+   *   - the device hasn't published a `MAP_LIST` pointer yet
+   *     (typical until the user does at least one cleaning task
+   *     that gets saved), OR
+   *   - the cloud returns 80001 for the pointer read (folded into
+   *     the same `null` outcome rather than thrown — see
+   *     `DreameDeviceOfflineError`).
    */
   async fetchSavedMapList(opts: CallOptions = {}): Promise<MapSavedList | null> {
     let pointerResults;
@@ -731,40 +857,48 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * VERIFIED end-to-end on r2532a 2026-05-03 — round-trip
    * `Standard → Quiet → Standard` confirmed via property read-back.
    */
-  setSuction(level: SuctionLevel): Promise<unknown> {
-    return this.#client.setProperties(this.device.did, [
-      { ...VACUUM_PROP.SUCTION_LEVEL, value: level },
-    ]);
+  setSuction(level: SuctionLevel): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.setProperties(this.device.did, [
+        { ...VACUUM_PROP.SUCTION_LEVEL, value: level },
+      ]),
+    );
   }
 
   /** ASSUMED enum — NOT YET verified end-to-end on r2532a. */
-  setWaterVolume(level: WaterVolume): Promise<unknown> {
-    return this.#client.setProperties(this.device.did, [
-      { ...VACUUM_PROP.WATER_VOLUME, value: level },
-    ]);
+  setWaterVolume(level: WaterVolume): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.setProperties(this.device.did, [
+        { ...VACUUM_PROP.WATER_VOLUME, value: level },
+      ]),
+    );
   }
 
   /**
    * ASSUMED enum AND known to be wrong-shape on r2532a (see CleaningMode docstring).
    * Caller is responsible for passing a correct raw int until the bitfield is decoded.
    */
-  setCleaningMode(mode: CleaningMode | number): Promise<unknown> {
-    return this.#client.setProperties(this.device.did, [
-      { ...VACUUM_PROP.CLEANING_MODE, value: mode },
-    ]);
+  setCleaningMode(mode: CleaningMode | number): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.setProperties(this.device.did, [
+        { ...VACUUM_PROP.CLEANING_MODE, value: mode },
+      ]),
+    );
   }
 
   /**
    * VERIFIED end-to-end on r2532a 2026-05-03 — round-trip
    * `90 → 50 → 90` confirmed via property read-back.
    */
-  setVolume(volume: number): Promise<unknown> {
+  setVolume(volume: number): Promise<ActionResult> {
     if (volume < 0 || volume > 100) {
       throw new RangeError("volume must be 0-100");
     }
-    return this.#client.setProperties(this.device.did, [
-      { ...SETTINGS_PROP.VOLUME, value: volume },
-    ]);
+    return this.#tolerate80001(() =>
+      this.#client.setProperties(this.device.did, [
+        { ...SETTINGS_PROP.VOLUME, value: volume },
+      ]),
+    );
   }
 
   /**
@@ -772,6 +906,9 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * Each provided field becomes one entry in the `set_properties` array.
    *
    * Pass only the fields you want to change. `volume` is range-checked (0-100).
+   *
+   * Returns `{ kind: "acked", value: [] }` when no fields were passed
+   * (no-op short-circuit, no HTTP call issued).
    *
    * ```ts
    * await vacuum.setSettings({ suction: SuctionLevel.Quiet, waterVolume: WaterVolume.Low });
@@ -782,7 +919,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     waterVolume?: WaterVolume;
     cleaningMode?: CleaningMode | number;
     volume?: number;
-  }): Promise<unknown> {
+  }): Promise<ActionResult> {
     const writes: Array<{ siid: number; piid: number; value: unknown }> = [];
     if (opts.suction !== undefined) {
       writes.push({ ...VACUUM_PROP.SUCTION_LEVEL, value: opts.suction });
@@ -800,9 +937,11 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       writes.push({ ...SETTINGS_PROP.VOLUME, value: opts.volume });
     }
     if (writes.length === 0) {
-      return Promise.resolve([]);
+      return Promise.resolve({ kind: "acked", value: [] });
     }
-    return this.#client.setProperties(this.device.did, writes);
+    return this.#tolerate80001(() =>
+      this.#client.setProperties(this.device.did, writes),
+    );
   }
 
   // ─── internals ─────────────────────────────────────────────────────
@@ -852,16 +991,41 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * Dispatch the START_CUSTOM action with the given mode + payload object.
    * The payload is JSON-stringified (compact, no spaces) per Tasshack's
    * `device.py:4321` convention — the device parses the string itself.
+   *
+   * Returns the same `ActionResult` shape the public callers do — the
+   * 80001 ACK timeout is folded into `kind: "no-ack"`.
    */
-  #startCustom(mode: number, payload: Record<string, unknown>): Promise<unknown> {
+  #startCustom(mode: number, payload: Record<string, unknown>): Promise<ActionResult> {
     const json = JSON.stringify(payload);
-    return this.#client.callAction(this.device.did, {
-      ...VACUUM_ACTION.START_CUSTOM,
-      in: [
-        { piid: 1, value: mode },
-        { piid: 10, value: json },
-      ],
-    });
+    return this.#tolerate80001(() =>
+      this.#client.callAction(this.device.did, {
+        ...VACUUM_ACTION.START_CUSTOM,
+        in: [
+          { piid: 1, value: mode },
+          { piid: 10, value: json },
+        ],
+      }),
+    );
+  }
+
+  /**
+   * Run an HTTP-issuing call and fold the 80001 ACK timeout into a
+   * `"no-ack"` `ActionResult`. Any other thrown error bubbles up.
+   *
+   * Used by every public action method on `Vacuum` so they all share
+   * the same "device may have executed; watch MQTT to confirm"
+   * semantics for the misleading code-80001 case.
+   */
+  async #tolerate80001<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
+    try {
+      const value = await fn();
+      return { kind: "acked", value };
+    } catch (err) {
+      if (err instanceof DreameDeviceOfflineError) {
+        return { kind: "no-ack" };
+      }
+      throw err;
+    }
   }
 
   #setOnline(online: boolean): void {

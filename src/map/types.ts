@@ -3,10 +3,9 @@
  *
  * All coordinates are millimetres in the device's world frame, exactly as
  * Dreame's binary encodes them — no Y-flip, no centimetre rescale, no
- * origin shift. The browser renderer is expected to apply whichever
- * transform fits its rendering library. This is a deliberate departure
- * from the Valetudo schema; see `docs/live-map-roadmap.md` for the
- * rationale.
+ * origin shift. The consumer is expected to apply whichever transform
+ * fits its rendering library. This is a deliberate departure from the
+ * Valetudo schema; see `docs/live-map-format.md` for the rationale.
  */
 
 /** Frame type byte from the 27-byte map header. */

@@ -12,5 +12,9 @@ coverage/
 *.apk
 
 # Live-map fixtures contain raw OSS object names + per-blob AES keys —
-# keep out of the repo until a sanitization pass exists (roadmap Phase 0).
+# keep out of the repo until a sanitization pass exists.
 test/fixtures/map/
+
+# Probe-script output captures (probe-*.jsonl, etc.) carry the active
+# did / uid / OSS object names from a real session. Never committed.
+probe-*.jsonl

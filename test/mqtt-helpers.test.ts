@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { brokerUrl, buildStatusTopic, parseEventOccured, parseInfoPush } from "../src/mqtt.js";
+import { brokerUrl, buildStatusTopic, parseEventOccured, parseInfoPush, parseMapInfo } from "../src/mqtt.js";
 import type { DreameDevice } from "../src/types.js";
 
 function makeDevice(overrides: Partial<DreameDevice> = {}): DreameDevice {
@@ -116,5 +116,48 @@ describe("parseEventOccured", () => {
     expect(parseEventOccured("did", { eiid: 1 })).toBeNull();
     expect(parseEventOccured("did", { siid: 1 })).toBeNull();
     expect(parseEventOccured("did", { siid: "1", eiid: 1 })).toBeNull();
+  });
+});
+
+describe("parseMapInfo", () => {
+  it("decodes the doubly-JSON-encoded map_info from a real r2532a capture", () => {
+    // Captured live 2026-05-06 in probe-saved-map-noack.ts phase 3.
+    const out = parseMapInfo("660622937", {
+      map_info: '{"0":[5,10],"1":[0],"3":[0],"4":[0],"7":[0],"8":[0],"9":[0],"12":[0],"14":[0]}',
+    });
+    expect(out).not.toBeNull();
+    expect(out?.did).toBe("660622937");
+    expect(out?.maps.size).toBe(9);
+    expect(out?.maps.get(0)).toEqual([5, 10]);
+    expect(out?.maps.get(1)).toEqual([0]);
+    expect(out?.maps.get(14)).toEqual([0]);
+  });
+
+  it("returns null when map_info is missing or not a string", () => {
+    expect(parseMapInfo("did", {})).toBeNull();
+    expect(parseMapInfo("did", { map_info: 123 })).toBeNull();
+  });
+
+  it("returns null when the inner JSON is malformed", () => {
+    expect(parseMapInfo("did", { map_info: "{not json" })).toBeNull();
+  });
+
+  it("returns null when the inner JSON is an array, not an object", () => {
+    expect(parseMapInfo("did", { map_info: "[1,2,3]" })).toBeNull();
+  });
+
+  it("skips entries with non-numeric keys or non-array values", () => {
+    const out = parseMapInfo("did", {
+      map_info: '{"5":[1,2],"NaN":[1],"x":[1],"6":"not-array","7":[3,"4",5]}',
+    });
+    expect(out?.maps.size).toBe(2);
+    expect(out?.maps.get(5)).toEqual([1, 2]);
+    // Non-numeric values within the array are filtered out.
+    expect(out?.maps.get(7)).toEqual([3, 5]);
+  });
+
+  it("prefers params.did over the fallback when present", () => {
+    const out = parseMapInfo("fallback", { did: 660622937, map_info: '{"0":[1]}' });
+    expect(out?.did).toBe("660622937");
   });
 });

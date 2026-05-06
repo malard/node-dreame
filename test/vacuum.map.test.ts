@@ -128,6 +128,63 @@ describe("Vacuum.map", () => {
     await vacuum.unwatch();
   });
 
+  it("re-emits the underlying subscription's mapInfo event through Vacuum", async () => {
+    const sub = new FakeSubscription();
+    const vacuum = new Vacuum(fakeClient([sub]), DEVICE);
+    await vacuum.watch();
+
+    const events: Array<{ did: string; mapsKeys: number[] }> = [];
+    vacuum.on("mapInfo", (push) => {
+      events.push({ did: push.did, mapsKeys: [...push.maps.keys()] });
+    });
+
+    sub.emit("mapInfo", { did: "DID-1", maps: new Map([[0, [5, 10]], [3, [0]]]) });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.did).toBe("DID-1");
+    expect(events[0]!.mapsKeys).toEqual([0, 3]);
+
+    await vacuum.unwatch();
+  });
+
+  it("fetchCurrentMap() opens a temporary subscription, returns the I-frame, and closes it", async () => {
+    const sub = new FakeSubscription();
+    const vacuum = new Vacuum(fakeClient([sub]), DEVICE);
+
+    // Schedule the push to land *after* fetchCurrentMap has created the
+    // MapManager and registered its 'map' listener inside whenReady().
+    // 50ms is comfortably past the few microtasks needed for that setup.
+    setTimeout(() => {
+      sub.emit("properties", [
+        { did: "DID-1", siid: 6, piid: 1, value: wrapEnvelope(buildIFrame(123)) },
+      ]);
+    }, 50);
+
+    const data = await vacuum.fetchCurrentMap(5_000);
+    expect(data.frameId).toBe(123);
+    expect(sub.closed).toBe(true);
+  });
+
+  it("fetchCurrentMap() reuses an existing subscription and leaves it open", async () => {
+    const sub = new FakeSubscription();
+    const vacuum = new Vacuum(fakeClient([sub]), DEVICE);
+    await vacuum.watch();
+    // Touch vacuum.map so the lazy MapManager is wired before we emit.
+    void vacuum.map;
+
+    setTimeout(() => {
+      sub.emit("properties", [
+        { did: "DID-1", siid: 6, piid: 1, value: wrapEnvelope(buildIFrame(7)) },
+      ]);
+    }, 50);
+
+    const data = await vacuum.fetchCurrentMap(5_000);
+    expect(data.frameId).toBe(7);
+    expect(sub.closed).toBe(false);
+
+    await vacuum.unwatch();
+  });
+
   it("unwatch() stops + discards the manager; the next watch() yields a fresh one", async () => {
     const sub1 = new FakeSubscription();
     const sub2 = new FakeSubscription();

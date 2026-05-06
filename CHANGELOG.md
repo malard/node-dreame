@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-05-06
+
+### Breaking changes
+
+- **`Vacuum.refresh()` discriminator renamed and `state.online` no
+  longer flipped on 80001.** `RefreshResult.kind` is now
+  `"acked" | "no-ack"` instead of `"online" | "offline"` — the
+  outcome describes whether the cloud's HTTP-side ACK arrived in
+  time, not whether the device is reachable. The `"no-ack"` branch
+  no longer forces `state.online = false`; the previous behaviour
+  was based on the misreading of code 80001 corrected in 0.1.4. The
+  MQTT `connect` / `close` listeners remain the authoritative
+  source for `state.online`, so that value now stays untouched
+  whenever the HTTP read times out.
+- **Every `Vacuum` action and settings method now returns
+  `Promise<ActionResult>` instead of `Promise<unknown>`.** Affected:
+  `start`, `pause`, `stop`, `dock`, `locate`, `clearWarning`,
+  `startAutoEmpty`, `cleanSegments`, `cleanZones`, `cleanSpot`,
+  `resume`, `cancelCurrentJob`, `goHome`, `setSuction`,
+  `setWaterVolume`, `setCleaningMode`, `setVolume`, `setSettings`.
+  `ActionResult = { kind: "acked"; value } | { kind: "no-ack" }`.
+  Code 80001 from the cloud's HTTP-side ACK waiter is folded into
+  `"no-ack"` rather than thrown — the device frequently executes
+  the action anyway, so `"no-ack"` means "watch MQTT to confirm,"
+  not "the call failed." Non-80001 errors still throw. New
+  `ActionResult` and `VerifyMqttResult` types are exported from
+  `node-dreame`.
+- **`VACUUM_PROP.DETERGENT_DOSAGE_INT` / `DETERGENT_DOSAGE_STR`
+  renamed to `NUMERIC_MESSAGE_PROMPT` / `MESSAGE_PROMPT`.** The
+  earlier names were a mislabel — the synchronous firing observed
+  when toggling detergent dosage on r2532a was coincidental
+  notification traffic, not the dosage value. The maintainer of
+  Tasshack/dreame-vacuum confirmed on 2026-05-06 that siid 4 piid
+  56/57 are general-purpose home-page message channels. JSDoc and
+  the `docs/spec-discovery-methodology.md` table updated to match.
+
+### Added
+
+- **`Vacuum.fetchCurrentMap(timeoutMs?)`** — MQTT-driven current-
+  floor-plan fetch with lifecycle handled. Probed live 2026-05-06:
+  this is the path the Dreamehome mobile app uses when the cloud's
+  HTTP `getProperties` is 80001-timing-out, which is the same state
+  that has been making `fetchSavedMapList()` return `null`. Watches
+  MQTT for the device's PATH push, fetches the announced OSS
+  object, and returns decoded `MapData`. Opens a temporary
+  subscription if `watch()` isn't already active and closes it
+  before resolving. Single-floor consumers should prefer this over
+  `fetchSavedMapList()`.
+- **`'mapInfo'` event on `Vacuum` and `DreameSubscription`** —
+  fires on the device's `_sync.update_vacuum_mapinfo` MQTT method,
+  carrying the saved-map catalogue parsed into a
+  `Map<mapId, number[]>`. Previously dropped silently (memory had
+  this flagged as a known gap). The inner array values are not
+  yet fully decoded — observed `[5,10]` for one map and `[0]` for
+  the others on r2532a, suggestive of `[active_flag, ?]` or
+  `[version, count]`. Surfaced raw so consumers can experiment.
+  New `MapInfoPush` type exported from `node-dreame`.
+- **`examples/probe-state-on-80001.ts`** — capture probe for the
+  state-population question: subscribes MQTT, fires
+  `getProperties`, and dumps every push + the 80001 response body
+  (if any) as JSONL on stdout. Used to investigate whether there's
+  a library-side seed path for `vacuum.state` when the cloud
+  returns 80001 from the HTTP read; the answer today is "no, not
+  without an APK-decompile pass on the Dreamehome mobile app."
+- **`examples/probe-saved-map-noack.ts`** — six-phase capture
+  probe used to determine the path the Dreamehome mobile app
+  takes when fetching saved-map data against a device whose HTTP
+  read is 80001-timing-out. Phase 3 prompts the operator to open
+  the app on the same device; the resulting MQTT pushes drove the
+  `fetchCurrentMap()` and `'mapInfo'` design above.
+
+### Documentation
+
+- **`docs/live-map-roadmap.md` replaced by `docs/live-map-format.md`.**
+  The old file was a working notebook — phase-status blocks, "DONE
+  YYYY-MM-DD" tags, executor checklists, open questions, and
+  consumer-specific sections — half of which were already stale.
+  The replacement is a flat binary-format reference: outer
+  envelope, 27-byte header, three pixel-grid decoders, JSON tail
+  keys, frame types + P-frame merge rules, coordinate system, OSS
+  endpoints, output schema, and Tasshack file:line landmarks. Two
+  internal references (`src/miot-spec.ts`, `src/map/types.ts`) and
+  one README link updated to point at the new file.
+- **README "Live updates over MQTT" section** gained a subsection
+  explaining how `vacuum.state` populates: from a `kind: "acked"`
+  `refresh()` (full seed in one round-trip) OR from MQTT
+  `properties_changed` pushes (per-field patches on change). On a
+  quiet idle device whose `refresh()` no-acks, fields can stay
+  null for minutes — consumers should treat the `'change'` event
+  as the source of truth rather than reading `state` synchronously.
+- **`Vacuum.state` JSDoc** now documents the same two sources and
+  the no-seed-on-80001 behaviour.
+- **`Vacuum.fetchSavedMapList()` JSDoc** clarifies that this is
+  the multi-floor metadata path that depends on the cloud's HTTP
+  read succeeding, frequently returns `null` for that reason, and
+  is NOT the path the mobile app uses for rendering — it points
+  single-floor consumers at `fetchCurrentMap()`.
+- **README "Live updates over MQTT" section** gained a
+  "Getting a current floor plan" subsection comparing
+  `fetchCurrentMap()` and `fetchSavedMapList()`, plus a sample of
+  the `'mapInfo'` event for multi-floor awareness.
+
 ## [0.1.4] - 2026-05-04
 
 Live-MQTT subscription, action-call, and live-map ergonomics —

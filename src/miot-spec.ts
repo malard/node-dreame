@@ -263,19 +263,21 @@ export const VACUUM_PROP = {
    */
   MOP_WASH_WATER_LEVEL: { siid: 4, piid: 46 } as const,
   /**
-   * VERIFIED on r2532a — appeared synchronously with detergent toggle. Likely detergent dosage units (value 11 observed).
-   * TODO: revalidate. Tasshack/dreame-vacuum (dev branch) labels siid 4 piid 56 as
-   * `NUMERIC_MESSAGE_PROMPT`, not a detergent property. The co-firing with the detergent
-   * toggle on r2532a is suggestive but not conclusive — re-toggle detergent in isolation
-   * and toggle each app-side message-prompt setting to confirm which interpretation holds.
+   * General-purpose numeric notification prompt — used by the device
+   * home page to display arbitrary numeric messages. NOT a detergent
+   * property: the maintainer of Tasshack/dreame-vacuum confirmed on
+   * 2026-05-06 that this is a generic message-prompt channel, and the
+   * synchronous firing observed when toggling detergent dosage on
+   * r2532a was coincidental notification traffic, not the dosage
+   * value itself.
    */
-  DETERGENT_DOSAGE_INT: { siid: 4, piid: 56 } as const,
+  NUMERIC_MESSAGE_PROMPT: { siid: 4, piid: 56 } as const,
   /**
-   * VERIFIED on r2532a — string-typed twin of DETERGENT_DOSAGE_INT (e.g. "11"). Purpose unclear but co-fires with the int field.
-   * TODO: revalidate. Tasshack/dreame-vacuum (dev branch) labels siid 4 piid 57 as
-   * `MESSAGE_PROMPT`. Same caveat as piid 56 above.
+   * General-purpose string notification prompt — string-typed twin of
+   * `NUMERIC_MESSAGE_PROMPT`. Same generic-message semantics; not a
+   * detergent property despite earlier mislabelling on r2532a.
    */
-  DETERGENT_DOSAGE_STR: { siid: 4, piid: 57 } as const,
+  MESSAGE_PROMPT: { siid: 4, piid: 57 } as const,
   /**
    * VERIFIED on r2532a 2026-05-02 — mop-install in-progress flag. Pulses
    * `0 → 1 → 0` in lockstep with `MOP_INSTALL_ATTEMPT` (piid 6). When piid 6
@@ -599,7 +601,7 @@ export const AUTO_EMPTY_PROP = {
  *
  * This is the channel the live-map decoder reads from. Inline and
  * out-of-band (OSS-pointer) variants both flow through here; see
- * `docs/live-map-roadmap.md` for the full envelope format.
+ * `docs/live-map-format.md` for the full envelope format.
  */
 export const CLOUD_OBJ_PROP = {
   /**
