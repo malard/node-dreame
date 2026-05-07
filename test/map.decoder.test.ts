@@ -459,6 +459,68 @@ describe("parseVirtualWalls", () => {
   });
 });
 
+// ─── parseLowLyingAreas (A5) ────────────────────────────────────────
+
+import { parseLowLyingAreas } from "../src/map/decoder.js";
+
+describe("parseLowLyingAreas", () => {
+  it("returns empty when neither field is present", () => {
+    expect(parseLowLyingAreas(undefined, undefined)).toEqual([]);
+    expect(parseLowLyingAreas([], [])).toEqual([]);
+  });
+
+  it("decodes 4-corner roi as a polygon (mm world-frame)", () => {
+    // Real shape captured 2026-05-07 from r2532a.
+    const out = parseLowLyingAreas(undefined, [
+      {
+        id: 2,
+        type: 0,
+        hide: 0,
+        roi: [-2475, 16825, -2475, 17475, -1675, 17475, -1675, 16825],
+      },
+    ]);
+    expect(out).toEqual([
+      {
+        id: 2,
+        points: [
+          { x: -2475, y: 16825 },
+          { x: -2475, y: 17475 },
+          { x: -1675, y: 17475 },
+          { x: -1675, y: 16825 },
+        ],
+      },
+    ]);
+  });
+
+  it("prefers sneak_areas_end over sneak_areas when both are present", () => {
+    // sneak_areas_end is the saved variant — has the extra `area` field.
+    const out = parseLowLyingAreas(
+      [{ id: 1, roi: [0, 0, 0, 100, 100, 100, 100, 0], area: 0.85 }],
+      [{ id: 1, roi: [0, 0, 0, 100, 100, 100, 100, 0] }],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]!.area).toBe(0.85);
+  });
+
+  it("falls back to sneak_areas when sneak_areas_end is empty", () => {
+    const out = parseLowLyingAreas([], [{ id: 7, roi: [0, 0, 0, 1, 1, 1, 1, 0] }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.id).toBe(7);
+    expect(out[0]!.area).toBeUndefined();
+  });
+
+  it("skips entries with malformed roi (odd-length, too short, non-numeric)", () => {
+    const out = parseLowLyingAreas(undefined, [
+      { id: 1, roi: [1, 2, 3] }, // odd length
+      { id: 2, roi: [1, 2] }, // too short (need at least 4 ints / 2 points)
+      { id: 3, roi: ["a", "b", "c", "d"] as unknown as number[] }, // non-numeric
+      { id: 4, roi: [0, 0, 1, 0, 1, 1, 0, 1] }, // valid
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.id).toBe(4);
+  });
+});
+
 // ─── parseCleanedAreaOverlay ────────────────────────────────────────
 
 function buildDecmapEnvelope(opts: {

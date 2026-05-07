@@ -237,11 +237,14 @@ function mergeTails(
   if (!("sa" in p) && "sa" in prev) {
     merged.sa = prev.sa;
   }
-  // Virtual walls / no-go / no-mop geometry is configuration, not live
-  // state — most P-frames don't re-send it. Fall back to prev when
-  // absent so the running state retains user-defined zones.
-  if (!("vw" in p) && "vw" in prev) {
-    merged.vw = prev.vw;
+  // User-defined geometry blocks are configuration, not live state —
+  // most P-frames don't re-send any of them. Fall back to prev when
+  // absent so the running state retains user-defined zones / walls /
+  // thresholds / sneak-zones across the chain.
+  for (const key of ["vw", "vws", "sneak_areas", "sneak_areas_end", "rism"] as const) {
+    if (!(key in p) && key in prev) {
+      merged[key] = prev[key];
+    }
   }
   // decmap is the cleaning-progress snapshot — re-emitted only on full
   // updates, not every P-frame. Fall back to prev when absent so the

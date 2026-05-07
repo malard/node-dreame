@@ -66,6 +66,9 @@ describe("MapDecoder.decode — rism recurse (A1)", () => {
     // vw.nocpt → 1 additional no-go rect alongside the empty vw.rect/mop.
     const noGo = data.restrictedAreas.filter((a) => a.kind === "noGo");
     expect(noGo).toHaveLength(1);
+    // sneak_areas → 2 low-lying-area polygons (4-corner ROIs).
+    expect(data.lowLyingAreas).toHaveLength(2);
+    expect(data.lowLyingAreas[0]!.points).toHaveLength(4);
   });
 
   it("recurses into tail.rism when outer tail has no vw block", () => {

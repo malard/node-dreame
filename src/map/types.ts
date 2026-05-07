@@ -166,6 +166,28 @@ export interface MapRestrictedArea {
 }
 
 /**
+ * One user-defined low-clearance "sneak under furniture" zone — the
+ * X50 retracts its tower while passing through. Surfaced from the
+ * tail's `sneak_areas` / `sneak_areas_end` field (Tasshack `dev`
+ * `map.py:4776-4809`).
+ *
+ * The wire format is a polygon: `roi` is an even-length list of
+ * alternating `x0, y0, x1, y1, …` ints in mm world-frame. On
+ * r2532a 2026-05-07 every observed entry was a 4-corner rect (8
+ * ints) — but the Tasshack reference parses arbitrary even lengths,
+ * so we surface the points as-emitted rather than coercing to a
+ * bounding box.
+ */
+export interface MapLowLyingArea {
+  /** Stable id from the wire format (for cross-frame correlation). */
+  id: number;
+  /** Polygon vertices in mm, world-frame. */
+  points: readonly MapPoint[];
+  /** Floor area in m² — present when the device emitted `sneak_areas_end`. */
+  area?: number;
+}
+
+/**
  * One saved map (floor) as returned by `Vacuum.fetchSavedMapList()`.
  *
  * `data` is the fully-decoded `MapData` for the saved map's binary
@@ -260,11 +282,25 @@ export interface MapData {
   // ── AI-detected obstacles ────────────────────────────────────────
   readonly obstacles: readonly MapObstacle[];
 
-  // ── User-defined geometry (from JSON tail's `vw`) ────────────────
-  /** Line-segment virtual walls. Empty array when none configured. */
+  // ── User-defined geometry (from JSON tail's `vw` / `vws`) ────────
+  /**
+   * Line-segment walls and threshold variants. Empty array when none
+   * configured. Each entry's `kind` (defaults to `"wall"` when absent)
+   * and `passable` discriminate classic virtual walls (`vw.line`)
+   * from passable / impassable / virtual thresholds (`vws.vwsl` /
+   * `vws.npthrsd`). See `MapVirtualWall`.
+   */
   readonly virtualWalls: readonly MapVirtualWall[];
-  /** Axis-aligned restricted areas — both no-go (`vw.rect`) and no-mop (`vw.mop`). */
+  /**
+   * Axis-aligned restricted areas — both no-go (`vw.rect`, `vw.nocpt`)
+   * and no-mop (`vw.mop`).
+   */
   readonly restrictedAreas: readonly MapRestrictedArea[];
+  /**
+   * Low-clearance "sneak under furniture" zones from `sneak_areas` /
+   * `sneak_areas_end`. Empty array when none configured.
+   */
+  readonly lowLyingAreas: readonly MapLowLyingArea[];
 
   // ── Cleaned-area overlay (from JSON tail's `decmap`) ─────────────
   /**

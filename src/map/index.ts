@@ -20,6 +20,7 @@ export {
   parsePathTr,
   parseObstacles,
   parseVirtualWalls,
+  parseLowLyingAreas,
   parseCleanedAreaOverlay,
 } from "./decoder.js";
 export type { MapHeader, MapTail, RawSegInf, PixelClass } from "./decoder.js";
@@ -57,6 +58,7 @@ export type {
   MapFrameType,
   MapVirtualWall,
   MapRestrictedArea,
+  MapLowLyingArea,
   MapCleanedAreaOverlay,
   MapSaved,
   MapSavedList,

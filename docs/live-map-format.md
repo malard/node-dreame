@@ -179,11 +179,15 @@ inline `# Data json: <key>` comment naming its source key.
 | `ai_obstacle` | obstacles | `[[x, y, type, possibility, id, ...], ...]` |
 | `vw.line` | virtual walls | `[[x0,y0,x1,y1], ...]` |
 | `vw.rect` | no-go areas | rectangles |
+| `vw.mop`  | no-mop areas | rectangles |
+| `vw.nocpt` | additional no-go rects | `[[x0,y0,x1,y1], ...]` (NOT carpets despite the name) |
+| `vws.vwsl` | virtual walls / passable thresholds | line segments — passable when `vws.npthrsd` is also present, virtual otherwise |
+| `vws.npthrsd` | impassable thresholds | line segments — X50 (Tasshack `dev` `map.py:4683`) |
 | `cleanareaorder` | cleaning sequence | per-segment ordering |
 | `whm` | embedded wifi map | recursive blob — not decoded |
-| `rism` | embedded saved map | recursive blob — not decoded |
+| `rism` | embedded saved map | recursive map envelope — `MapDecoder.decode` recurses one level into this when the outer tail's `vw`/`vws` is absent and merges the inner geometry onto the outer `MapData` (verified live on r2532a fw 4.3.9_2199 — geometry lives only here on this firmware) |
 | `decmap` | embedded cleaning map | recursive blob — cleaned-area overlay, see `MapData.cleanedArea` |
-| `sneak_areas` | no-go-zone equivalent | observed on r2532a, format same as `vw.rect` |
+| `sneak_areas` / `sneak_areas_end` | low-clearance "sneak under" zones | polygon ROIs — `{id, type, hide, roi: [x0,y0,x1,y1,…], area?}`. Surfaced on `MapData.lowLyingAreas`. `sneak_areas_end` is the saved variant (carries `area`); preferred when both are present. NOT the same shape as `vw.rect`. |
 | `cs`, `mtid`, `curid`, `moptype` | misc | observed on r2532a; not load-bearing for v1 render |
 
 Segment names in `seg_inf.<id>.name` are base64-encoded — decode to

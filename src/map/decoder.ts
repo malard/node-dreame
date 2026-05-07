@@ -34,6 +34,7 @@ import type {
   MapDimensions,
   MapFrameType,
   MapLayer,
+  MapLowLyingArea,
   MapObstacle,
   MapPath,
   MapPathType,
@@ -82,6 +83,7 @@ export class MapDecoder {
     const paths = parsePathTr(tail.tr ?? "");
     const obstacles = parseObstacles(tail.ai_obstacle ?? []);
     let { virtualWalls, restrictedAreas } = parseVirtualWalls(tail.vw, tail.vws);
+    let lowLyingAreas = parseLowLyingAreas(tail.sneak_areas_end, tail.sneak_areas);
     // The persistent saved-map blob is embedded inline as `tail.rism`
     // (URL-safe-base64 + zlib + same envelope shape). On r2532a fw
     // 4.3.9_2199 the outer tail's `vw`/`vws` are absent and the
@@ -93,7 +95,9 @@ export class MapDecoder {
     // Recurses one level only — the inner saved-map blob does not
     // carry its own `rism`.
     if (
-      (virtualWalls.length === 0 || restrictedAreas.length === 0) &&
+      (virtualWalls.length === 0 ||
+        restrictedAreas.length === 0 ||
+        lowLyingAreas.length === 0) &&
       typeof tail.rism === "string" &&
       tail.rism.length > 0
     ) {
@@ -102,11 +106,15 @@ export class MapDecoder {
         const innerHeader = parseMapHeader(innerInflated);
         const innerTail = parseMapJsonTail(sliceTailText(innerInflated, innerHeader));
         const inner = parseVirtualWalls(innerTail.vw, innerTail.vws);
+        const innerLow = parseLowLyingAreas(innerTail.sneak_areas_end, innerTail.sneak_areas);
         if (virtualWalls.length === 0 && inner.virtualWalls.length > 0) {
           virtualWalls = inner.virtualWalls;
         }
         if (restrictedAreas.length === 0 && inner.restrictedAreas.length > 0) {
           restrictedAreas = inner.restrictedAreas;
+        }
+        if (lowLyingAreas.length === 0 && innerLow.length > 0) {
+          lowLyingAreas = innerLow;
         }
       } catch {
         // intentional — outer frame remains valid even if rism is unreadable
@@ -131,6 +139,7 @@ export class MapDecoder {
       obstacles,
       virtualWalls,
       restrictedAreas,
+      lowLyingAreas,
       cleanedArea,
     };
   }
@@ -370,6 +379,20 @@ export interface MapTail {
     ramp?: unknown[];
     cliff?: number[][];
   };
+  /**
+   * Low-clearance "sneak under furniture" zones — live-snapshot
+   * variant. Polygon ROIs in mm world-frame. Each entry is
+   * `{ id, type, hide, roi: [x0,y0,x1,y1,…] }`. NOT the same shape
+   * as `vw.rect`. See `parseLowLyingAreas`.
+   */
+  sneak_areas?: { id?: number; type?: number; hide?: number; roi?: number[]; ms?: number }[];
+  /**
+   * Low-clearance zones — saved variant, same shape as `sneak_areas`
+   * plus an `area` (m²) field. Preferred over `sneak_areas` when both
+   * are present in the same tail; `sneak_areas` is the live-fly
+   * version, `sneak_areas_end` is the saved one.
+   */
+  sneak_areas_end?: { id?: number; type?: number; hide?: number; roi?: number[]; ms?: number; area?: number }[];
   /**
    * Embedded saved-map blob — the persistent floor plan, encoded as
    * a URL-safe-base64 + zlib + same-binary-header-as-MAP_DATA envelope
@@ -923,6 +946,64 @@ function parseLine(
     return { from: { x: x0, y: y0 }, to: { x: x1, y: y1 } };
   }
   return { from: { x: x0, y: y0 }, to: { x: x1, y: y1 }, kind };
+}
+
+interface SneakAreaEntry {
+  id?: number;
+  type?: number;
+  hide?: number;
+  roi?: number[];
+  ms?: number;
+  area?: number;
+}
+
+/**
+ * Parse low-clearance "sneak under furniture" zones from a tail's
+ * `sneak_areas` / `sneak_areas_end` arrays. Verified live 2026-05-07
+ * on r2532a fw 4.3.9_2199 (every observed entry was a 4-corner rect,
+ * 8 ints in `roi`); Tasshack `dev` `map.py:4776-4809` parses
+ * arbitrary even-length polygons, so we surface points as-emitted
+ * without coercing to a bounding box.
+ *
+ * `sneak_areas_end` is preferred when both fields are present in the
+ * same tail — it carries the saved `area` field. `sneak_areas` is the
+ * live-fly variant.
+ */
+export function parseLowLyingAreas(
+  end: SneakAreaEntry[] | undefined,
+  live: SneakAreaEntry[] | undefined,
+): MapLowLyingArea[] {
+  const source = end && end.length > 0 ? end : live;
+  if (!source) {
+    return [];
+  }
+  const out: MapLowLyingArea[] = [];
+  for (const entry of source) {
+    if (!entry || !Array.isArray(entry.roi) || entry.roi.length < 4 || entry.roi.length % 2 !== 0) {
+      continue;
+    }
+    const points: { x: number; y: number }[] = [];
+    let badPoint = false;
+    for (let i = 0; i + 1 < entry.roi.length; i += 2) {
+      const x = parseFloatField(entry.roi[i]);
+      const y = parseFloatField(entry.roi[i + 1]);
+      if (x === null || y === null) {
+        badPoint = true;
+        break;
+      }
+      points.push({ x, y });
+    }
+    if (badPoint || points.length === 0) {
+      continue;
+    }
+    const id = typeof entry.id === "number" ? entry.id : -1;
+    const area: MapLowLyingArea = { id, points };
+    if (typeof entry.area === "number") {
+      area.area = entry.area;
+    }
+    out.push(area);
+  }
+  return out;
 }
 
 /**
