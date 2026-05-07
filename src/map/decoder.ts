@@ -81,7 +81,37 @@ export class MapDecoder {
     const segments = canDecodePixels ? collectSegments(layers, dimensions, tail) : [];
     const paths = parsePathTr(tail.tr ?? "");
     const obstacles = parseObstacles(tail.ai_obstacle ?? []);
-    const { virtualWalls, restrictedAreas } = parseVirtualWalls(tail.vw);
+    let { virtualWalls, restrictedAreas } = parseVirtualWalls(tail.vw);
+    // The persistent saved-map blob is embedded inline as `tail.rism`
+    // (URL-safe-base64 + zlib + same envelope shape). On r2532a fw
+    // 4.3.9_2199 the outer tail's `vw` is absent and the geometry
+    // lives only in the inner saved-map's tail. Recurse to surface
+    // it; if the inner blob fails to decode (corrupt, unexpected
+    // shape, missing AES IV, etc.) leave the outer values as-is and
+    // swallow the error — geometry decode failure must never break
+    // pixel/path/obstacle decode of the outer frame. Recurses one
+    // level only — the inner saved-map blob does not carry its own
+    // `rism`.
+    if (
+      (virtualWalls.length === 0 || restrictedAreas.length === 0) &&
+      typeof tail.rism === "string" &&
+      tail.rism.length > 0
+    ) {
+      try {
+        const innerInflated = unwrapEnvelope(tail.rism);
+        const innerHeader = parseMapHeader(innerInflated);
+        const innerTail = parseMapJsonTail(sliceTailText(innerInflated, innerHeader));
+        const inner = parseVirtualWalls(innerTail.vw);
+        if (virtualWalls.length === 0 && inner.virtualWalls.length > 0) {
+          virtualWalls = inner.virtualWalls;
+        }
+        if (restrictedAreas.length === 0 && inner.restrictedAreas.length > 0) {
+          restrictedAreas = inner.restrictedAreas;
+        }
+      } catch {
+        // intentional — outer frame remains valid even if rism is unreadable
+      }
+    }
     const cleanedArea =
       typeof tail.decmap === "string" ? parseCleanedAreaOverlay(tail.decmap) : null;
 
@@ -315,6 +345,18 @@ export interface MapTail {
     addcpt?: unknown[];
     nocpt?: unknown[];
   };
+  /**
+   * Embedded saved-map blob — the persistent floor plan, encoded as
+   * a URL-safe-base64 + zlib + same-binary-header-as-MAP_DATA envelope
+   * (i.e. itself a map frame). Verified live 2026-05-07 (r2532a fw
+   * 4.3.9_2199): on this firmware the live I-frame's top-level tail
+   * does NOT carry the `vw` user-geometry block — the geometry lives
+   * in this embedded saved map. `MapDecoder.decode` recurses into
+   * `rism` and merges the inner `vw` block onto the outer `MapData`
+   * so consumers see "all walls for this floor" regardless of where
+   * the device chose to put them on this firmware.
+   */
+  rism?: string;
   [key: string]: unknown;
 }
 
@@ -619,7 +661,20 @@ const PATH_OP_REGEX = /([MWSLl])(-?\d+),(-?\d+)/g;
  *   M = mop,   W = sweep+mop,   S = sweep,   L = line moveTo,
  *   l = P-frame line continuation (treated as L per Tasshack map.py:3987).
  *
- * Coordinates are millimetres world-frame.
+ * Coordinates are millimetres world-frame for `mop` / `sweep` /
+ * `sweep-and-mop` waypoints. **Line ops are RELATIVE deltas** to the
+ * preceding absolute waypoint (or the previous point within the same
+ * line). The accumulator unwinds them so every surfaced point is
+ * absolute world-frame mm — verified live 2026-05-07 against r2532a
+ * (without unwinding, 1000s of `line` deltas all cluster around the
+ * world origin and render as a tight artifact).
+ *
+ * When a `line` op appears with no preceding absolute waypoint
+ * (e.g. when `tr` starts with `L`/`l` and there's no anchor to
+ * accumulate against — rare but possible at the very start of a
+ * fresh subscription), the points are emitted literally. Callers
+ * downstream of the merge layer don't see this path because P-frame
+ * `tr` concatenation always prepends the prior absolute waypoint.
  */
 export function parsePathTr(tr: string): MapPath[] {
   if (!tr) {
@@ -630,20 +685,43 @@ export function parsePathTr(tr: string): MapPath[] {
   type MutablePath = { type: MapPathType; points: { x: number; y: number }[] };
   const out: MutablePath[] = [];
   let current: MutablePath | null = null;
+  let anchor: { x: number; y: number } | null = null;
   for (const m of tr.matchAll(PATH_OP_REGEX)) {
     const opRaw = m[1]!;
-    const x = Number(m[2]);
-    const y = Number(m[3]);
+    const xRaw = Number(m[2]);
+    const yRaw = Number(m[3]);
     const op = opRaw === "l" ? "L" : opRaw;
     const type = PATH_TYPE_FROM_OP[op];
     if (!type) {
       continue;
     }
-    if (!current || current.type !== type) {
-      current = { type, points: [{ x, y }] };
-      out.push(current);
+    if (type === "line" && anchor !== null) {
+      // Accumulate the relative delta against the running anchor.
+      const abs = { x: anchor.x + xRaw, y: anchor.y + yRaw };
+      if (!current || current.type !== type) {
+        // New line segment: seed with the anchor itself so the line
+        // draws a continuous trace from the preceding waypoint.
+        current = { type, points: [{ x: anchor.x, y: anchor.y }, abs] };
+        out.push(current);
+      } else {
+        current.points.push(abs);
+      }
+      anchor = abs;
     } else {
-      current.points.push({ x, y });
+      // Either an absolute waypoint (S / W / M) or a `line` with no
+      // anchor yet — emit literally.
+      const pt = { x: xRaw, y: yRaw };
+      if (!current || current.type !== type) {
+        current = { type, points: [pt] };
+        out.push(current);
+      } else {
+        current.points.push(pt);
+      }
+      if (type !== "line") {
+        // Absolute waypoint — update the anchor for any following
+        // `line` op to accumulate against.
+        anchor = pt;
+      }
     }
   }
   return out;

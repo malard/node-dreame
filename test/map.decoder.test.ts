@@ -205,6 +205,67 @@ describe("parsePathTr", () => {
   it("returns empty array for empty input", () => {
     expect(parsePathTr("")).toEqual([]);
   });
+
+  // A7: line ops are RELATIVE deltas to the preceding absolute waypoint.
+  // Without unwinding, traces with thousands of `line` deltas cluster
+  // around (0,0) instead of following the preceding S/W/M anchor.
+  // Verified live against r2532a 2026-05-07 (wealth-monitor's
+  // dreame-integration-gaps-2026-05-07.md).
+  it("accumulates line-op deltas against the preceding absolute waypoint", () => {
+    const out = parsePathTr("S100,200L1,1L2,3L-1,-1");
+    expect(out).toEqual([
+      { type: "sweep", points: [{ x: 100, y: 200 }] },
+      {
+        type: "line",
+        points: [
+          { x: 100, y: 200 }, // anchor seed (= last sweep waypoint)
+          { x: 101, y: 201 }, // (100+1, 200+1)
+          { x: 103, y: 204 }, // (101+2, 201+3)
+          { x: 102, y: 203 }, // (103-1, 204-1)
+        ],
+      },
+    ]);
+  });
+
+  it("re-anchors line accumulation on each new absolute waypoint", () => {
+    const out = parsePathTr("S100,200L1,1S500,600L10,10");
+    expect(out).toEqual([
+      { type: "sweep", points: [{ x: 100, y: 200 }] },
+      { type: "line", points: [{ x: 100, y: 200 }, { x: 101, y: 201 }] },
+      { type: "sweep", points: [{ x: 500, y: 600 }] },
+      // line restarts after the new sweep — anchor is (500,600)
+      { type: "line", points: [{ x: 500, y: 600 }, { x: 510, y: 610 }] },
+    ]);
+  });
+
+  it("falls back to literal coords for line ops with no preceding anchor", () => {
+    // Pre-existing behaviour preserved: tr starts with L → no anchor →
+    // emit literally. Tests #1/#2 above already cover this case but
+    // assert it explicitly.
+    const out = parsePathTr("L10,20L30,40");
+    expect(out).toEqual([
+      { type: "line", points: [{ x: 10, y: 20 }, { x: 30, y: 40 }] },
+    ]);
+  });
+
+  it("treats lowercase l as L for delta accumulation", () => {
+    // Per Tasshack, lowercase l is a P-frame line continuation. After
+    // a normalised concatenation through merge, the anchor from a
+    // prior sweep applies to subsequent lowercase deltas the same as
+    // uppercase.
+    const out = parsePathTr("M0,0l5,7l3,-2");
+    expect(out).toEqual([
+      { type: "mop", points: [{ x: 0, y: 0 }] },
+      {
+        type: "line",
+        points: [
+          { x: 0, y: 0 },
+          { x: 5, y: 7 },
+          { x: 8, y: 5 },
+        ],
+      },
+    ]);
+  });
 });
 
 // ─── obstacle parser — synthetic ─────────────────────────────────────
