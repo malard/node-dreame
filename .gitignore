@@ -15,6 +15,7 @@ coverage/
 # keep out of the repo until a sanitization pass exists.
 test/fixtures/map/
 
-# Probe-script output captures (probe-*.jsonl, etc.) carry the active
-# did / uid / OSS object names from a real session. Never committed.
+# Probe-script output captures carry the active did / uid / OSS
+# object names from a real session. Never committed.
 probe-*.jsonl
+threshold-*.jsonl
