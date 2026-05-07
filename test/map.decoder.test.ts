@@ -521,6 +521,96 @@ describe("parseLowLyingAreas", () => {
   });
 });
 
+// ─── parseWallsInfo (A6) ────────────────────────────────────────────
+
+import { parseWallsInfo } from "../src/map/decoder.js";
+
+describe("parseWallsInfo", () => {
+  it("returns null for absent / empty input", () => {
+    expect(parseWallsInfo(undefined)).toBeNull();
+    expect(parseWallsInfo({ version_flag: 3, storeys: [] })).toBeNull();
+  });
+
+  it("parses storey/room/wall hierarchy with normal vector", () => {
+    const out = parseWallsInfo({
+      version_flag: 3,
+      storeys: [
+        {
+          rooms: [
+            {
+              room_id: 10,
+              walls: [
+                {
+                  type: 0,
+                  beg_pt_x: -8225,
+                  beg_pt_y: 9275,
+                  end_pt_x: -9025,
+                  end_pt_y: 9275,
+                  normal_x: 0,
+                  normal_y: -1,
+                },
+                {
+                  type: 1,
+                  beg_pt_x: -9025,
+                  beg_pt_y: 9275,
+                  end_pt_x: -9925,
+                  end_pt_y: 9275,
+                  normal_x: 0,
+                  normal_y: -1,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(out).not.toBeNull();
+    expect(out!.versionFlag).toBe(3);
+    expect(out!.storeys).toHaveLength(1);
+    expect(out!.storeys[0]!.rooms).toHaveLength(1);
+    const room = out!.storeys[0]!.rooms[0]!;
+    expect(room.roomId).toBe(10);
+    expect(room.walls).toHaveLength(2);
+    expect(room.walls[0]).toEqual({
+      type: 0,
+      from: { x: -8225, y: 9275 },
+      to: { x: -9025, y: 9275 },
+      normal: { x: 0, y: -1 },
+    });
+    // type:1 (opening / doorway) is preserved as-emitted
+    expect(room.walls[1]!.type).toBe(1);
+  });
+
+  it("skips walls with missing fields without dropping the surrounding room", () => {
+    const out = parseWallsInfo({
+      storeys: [
+        {
+          rooms: [
+            {
+              room_id: 5,
+              walls: [
+                // missing normal_y — should be skipped
+                { type: 0, beg_pt_x: 0, beg_pt_y: 0, end_pt_x: 100, end_pt_y: 0, normal_x: 0 },
+                // valid
+                {
+                  type: 0,
+                  beg_pt_x: 100,
+                  beg_pt_y: 0,
+                  end_pt_x: 100,
+                  end_pt_y: 100,
+                  normal_x: 1,
+                  normal_y: 0,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(out!.storeys[0]!.rooms[0]!.walls).toHaveLength(1);
+  });
+});
+
 // ─── parseCleanedAreaOverlay ────────────────────────────────────────
 
 function buildDecmapEnvelope(opts: {

@@ -40,9 +40,13 @@ import type {
   MapPathType,
   MapPose,
   MapRestrictedArea,
+  MapRoom,
+  MapRoomWall,
   MapRun,
   MapSegment,
+  MapStorey,
   MapVirtualWall,
+  MapWallsInfo,
 } from "./types.js";
 import { mergePFrame, mergePFrameEnvelope } from "./merge.js";
 
@@ -84,6 +88,7 @@ export class MapDecoder {
     const obstacles = parseObstacles(tail.ai_obstacle ?? []);
     let { virtualWalls, restrictedAreas } = parseVirtualWalls(tail.vw, tail.vws);
     let lowLyingAreas = parseLowLyingAreas(tail.sneak_areas_end, tail.sneak_areas);
+    let wallsInfo = parseWallsInfo(tail.walls_info);
     // The persistent saved-map blob is embedded inline as `tail.rism`
     // (URL-safe-base64 + zlib + same envelope shape). On r2532a fw
     // 4.3.9_2199 the outer tail's `vw`/`vws` are absent and the
@@ -97,7 +102,8 @@ export class MapDecoder {
     if (
       (virtualWalls.length === 0 ||
         restrictedAreas.length === 0 ||
-        lowLyingAreas.length === 0) &&
+        lowLyingAreas.length === 0 ||
+        wallsInfo === null) &&
       typeof tail.rism === "string" &&
       tail.rism.length > 0
     ) {
@@ -107,6 +113,7 @@ export class MapDecoder {
         const innerTail = parseMapJsonTail(sliceTailText(innerInflated, innerHeader));
         const inner = parseVirtualWalls(innerTail.vw, innerTail.vws);
         const innerLow = parseLowLyingAreas(innerTail.sneak_areas_end, innerTail.sneak_areas);
+        const innerWallsInfo = parseWallsInfo(innerTail.walls_info);
         if (virtualWalls.length === 0 && inner.virtualWalls.length > 0) {
           virtualWalls = inner.virtualWalls;
         }
@@ -115,6 +122,9 @@ export class MapDecoder {
         }
         if (lowLyingAreas.length === 0 && innerLow.length > 0) {
           lowLyingAreas = innerLow;
+        }
+        if (wallsInfo === null && innerWallsInfo !== null) {
+          wallsInfo = innerWallsInfo;
         }
       } catch {
         // intentional — outer frame remains valid even if rism is unreadable
@@ -140,6 +150,7 @@ export class MapDecoder {
       virtualWalls,
       restrictedAreas,
       lowLyingAreas,
+      wallsInfo,
       cleanedArea,
     };
   }
@@ -393,6 +404,27 @@ export interface MapTail {
    * version, `sneak_areas_end` is the saved one.
    */
   sneak_areas_end?: { id?: number; type?: number; hide?: number; roi?: number[]; ms?: number; area?: number }[];
+  /**
+   * Per-room wall geometry, only on saved-map blobs. See
+   * `parseWallsInfo`.
+   */
+  walls_info?: {
+    version_flag?: number;
+    storeys?: {
+      rooms?: {
+        room_id?: number;
+        walls?: {
+          type?: number;
+          beg_pt_x?: number;
+          beg_pt_y?: number;
+          end_pt_x?: number;
+          end_pt_y?: number;
+          normal_x?: number;
+          normal_y?: number;
+        }[];
+      }[];
+    }[];
+  };
   /**
    * Embedded saved-map blob — the persistent floor plan, encoded as
    * a URL-safe-base64 + zlib + same-binary-header-as-MAP_DATA envelope
@@ -946,6 +978,84 @@ function parseLine(
     return { from: { x: x0, y: y0 }, to: { x: x1, y: y1 } };
   }
   return { from: { x: x0, y: y0 }, to: { x: x1, y: y1 }, kind };
+}
+
+/**
+ * Parse the saved-map's per-room wall geometry. Wire shape (verified
+ * 2026-05-07 against r2532a fw 4.3.9_2199):
+ *
+ * ```
+ * {
+ *   version_flag: 3,
+ *   storeys: [{
+ *     rooms: [{
+ *       room_id: 10,
+ *       walls: [{
+ *         type:      0,        // 0 = solid wall, 1 = opening (observed)
+ *         beg_pt_x:  -8225,
+ *         beg_pt_y:  9275,
+ *         end_pt_x:  -9025,
+ *         end_pt_y:  9275,
+ *         normal_x:  0,        // unit-vector pointing into the room
+ *         normal_y:  -1
+ *       }, …]
+ *     }, …]
+ *   }, …]
+ * }
+ * ```
+ *
+ * Returns `null` if the wire object is missing or has no storeys —
+ * the public field on `MapData` is null in that case rather than an
+ * empty `MapWallsInfo`.
+ */
+export function parseWallsInfo(
+  raw: NonNullable<MapTail["walls_info"]> | undefined,
+): MapWallsInfo | null {
+  if (!raw || !Array.isArray(raw.storeys) || raw.storeys.length === 0) {
+    return null;
+  }
+  const storeys: MapStorey[] = [];
+  for (const s of raw.storeys) {
+    if (!s || !Array.isArray(s.rooms)) {
+      continue;
+    }
+    const rooms: MapRoom[] = [];
+    for (const r of s.rooms) {
+      if (!r || typeof r.room_id !== "number" || !Array.isArray(r.walls)) {
+        continue;
+      }
+      const walls: MapRoomWall[] = [];
+      for (const w of r.walls) {
+        if (
+          !w ||
+          typeof w.type !== "number" ||
+          typeof w.beg_pt_x !== "number" ||
+          typeof w.beg_pt_y !== "number" ||
+          typeof w.end_pt_x !== "number" ||
+          typeof w.end_pt_y !== "number" ||
+          typeof w.normal_x !== "number" ||
+          typeof w.normal_y !== "number"
+        ) {
+          continue;
+        }
+        walls.push({
+          type: w.type,
+          from: { x: w.beg_pt_x, y: w.beg_pt_y },
+          to: { x: w.end_pt_x, y: w.end_pt_y },
+          normal: { x: w.normal_x, y: w.normal_y },
+        });
+      }
+      rooms.push({ roomId: r.room_id, walls });
+    }
+    storeys.push({ rooms });
+  }
+  if (storeys.length === 0) {
+    return null;
+  }
+  return {
+    versionFlag: typeof raw.version_flag === "number" ? raw.version_flag : 0,
+    storeys,
+  };
 }
 
 interface SneakAreaEntry {

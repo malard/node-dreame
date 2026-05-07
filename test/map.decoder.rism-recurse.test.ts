@@ -69,6 +69,12 @@ describe("MapDecoder.decode — rism recurse (A1)", () => {
     // sneak_areas → 2 low-lying-area polygons (4-corner ROIs).
     expect(data.lowLyingAreas).toHaveLength(2);
     expect(data.lowLyingAreas[0]!.points).toHaveLength(4);
+    // walls_info → version_flag=3, single storey with multiple rooms.
+    expect(data.wallsInfo).not.toBeNull();
+    expect(data.wallsInfo!.versionFlag).toBe(3);
+    expect(data.wallsInfo!.storeys.length).toBeGreaterThanOrEqual(1);
+    const allRooms = data.wallsInfo!.storeys.flatMap((s) => s.rooms);
+    expect(allRooms.length).toBeGreaterThan(0);
   });
 
   it("recurses into tail.rism when outer tail has no vw block", () => {

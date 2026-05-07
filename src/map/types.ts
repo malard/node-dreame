@@ -80,7 +80,18 @@ export interface MapLayer {
 export interface MapSegment {
   /** Segment id from the pixel grid (1..63). */
   id: number;
-  /** Decoded from `seg_inf.<id>.name` (base64). */
+  /**
+   * User-given room name. Already decoded from the wire format's
+   * base64 — use as-is, do NOT double-decode.
+   *
+   * `null` when `seg_inf.<id>.name` was missing entirely. Empty-string
+   * (`""`) when the user has not named the room — observed live on
+   * r2532a 2026-05-07 when no rooms were named in the Dreamehome app.
+   * Renderers that fall back via `s.name || \`Room ${s.id}\`` work
+   * correctly for both because both are falsy in JS, but a
+   * strict-null-only check (`s.name === null ? … : s.name`) would
+   * render visible empty labels.
+   */
   name: string | null;
   /** mm, world-frame, derived from the pixel scan. */
   bbox: MapBoundingBox;
@@ -163,6 +174,58 @@ export interface MapRestrictedArea {
   bbox: MapBoundingBox;
   /** Optional rotation hint from the wire format — degrees, may be undefined. */
   angle?: number;
+}
+
+/**
+ * One wall segment from the per-room wall geometry — present on
+ * saved maps as `walls_info.storeys[*].rooms[*].walls[*]`.
+ *
+ * `type` discriminates the wall variant; observed values on r2532a:
+ *   `0` — solid wall
+ *   `1` — opening / doorway
+ * Surfaced as-emitted; consumers can ignore or render selectively.
+ *
+ * `normal` is the unit-vector pointing into the room's interior on
+ * the wire (each component typically `-1`, `0`, or `1`).
+ */
+export interface MapRoomWall {
+  type: number;
+  from: MapPoint;
+  to: MapPoint;
+  normal: MapPoint;
+}
+
+/**
+ * One room's wall list inside `walls_info.storeys[*].rooms[*]`.
+ * `roomId` matches a segment id from the pixel grid where present
+ * (some captures show roomIds outside the 1..63 segment range, so do
+ * NOT assume a 1:1 mapping at the consumer layer).
+ */
+export interface MapRoom {
+  roomId: number;
+  walls: readonly MapRoomWall[];
+}
+
+/**
+ * One floor's worth of rooms inside `walls_info.storeys[*]`.
+ * Single-floor homes have exactly one storey; multi-floor would have
+ * one entry per floor. `MapData.wallsInfo` carries only the storey
+ * matching the current `mapId`.
+ */
+export interface MapStorey {
+  rooms: readonly MapRoom[];
+}
+
+/**
+ * Per-room wall geometry from the saved-map blob's `walls_info`
+ * field. Big and only present on saved maps (not live I-frames).
+ *
+ * `versionFlag` is the wire's `version_flag` int — surfaced
+ * unchanged in case the schema evolves.
+ */
+export interface MapWallsInfo {
+  versionFlag: number;
+  storeys: readonly MapStorey[];
 }
 
 /**
@@ -301,6 +364,13 @@ export interface MapData {
    * `sneak_areas_end`. Empty array when none configured.
    */
   readonly lowLyingAreas: readonly MapLowLyingArea[];
+  /**
+   * Per-room wall geometry from the saved-map blob's `walls_info`.
+   * `null` on live I-frames that don't carry the field — only
+   * populated when the parent frame has a saved-map blob to mine
+   * from (or is itself the saved-map blob).
+   */
+  readonly wallsInfo: MapWallsInfo | null;
 
   // ── Cleaned-area overlay (from JSON tail's `decmap`) ─────────────
   /**

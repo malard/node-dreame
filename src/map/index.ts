@@ -21,6 +21,7 @@ export {
   parseObstacles,
   parseVirtualWalls,
   parseLowLyingAreas,
+  parseWallsInfo,
   parseCleanedAreaOverlay,
 } from "./decoder.js";
 export type { MapHeader, MapTail, RawSegInf, PixelClass } from "./decoder.js";
@@ -59,6 +60,10 @@ export type {
   MapVirtualWall,
   MapRestrictedArea,
   MapLowLyingArea,
+  MapWallsInfo,
+  MapStorey,
+  MapRoom,
+  MapRoomWall,
   MapCleanedAreaOverlay,
   MapSaved,
   MapSavedList,

@@ -241,7 +241,14 @@ function mergeTails(
   // most P-frames don't re-send any of them. Fall back to prev when
   // absent so the running state retains user-defined zones / walls /
   // thresholds / sneak-zones across the chain.
-  for (const key of ["vw", "vws", "sneak_areas", "sneak_areas_end", "rism"] as const) {
+  for (const key of [
+    "vw",
+    "vws",
+    "sneak_areas",
+    "sneak_areas_end",
+    "walls_info",
+    "rism",
+  ] as const) {
     if (!(key in p) && key in prev) {
       merged[key] = prev[key];
     }
