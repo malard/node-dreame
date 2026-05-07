@@ -24,12 +24,7 @@ import type {
   MapPose,
   MapTail,
 } from "./types.js";
-import {
-  ANGLE_ABSENT,
-  HEADER_SIZE,
-  MapDecodeError,
-  unwrapEnvelope,
-} from "./envelope.js";
+import { ANGLE_ABSENT, HEADER_SIZE, unwrapEnvelope } from "./envelope.js";
 import type { MapHeader } from "./header.js";
 import { parseFrame } from "./tail.js";
 import { collectSegments, decodePixelGridFsm1 } from "./pixel-grid.js";

@@ -227,7 +227,7 @@ describe("Vacuum.fetchMapFromOss", () => {
     // resolve without leaving the process.
     const realFetch = globalThis.fetch;
     let getCalled = 0;
-    globalThis.fetch = (async (input: string | URL, init?: RequestInit): Promise<Response> => {
+    globalThis.fetch = (async (input: string | URL): Promise<Response> => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("/iotfile/getDownloadUrl")) {
         return new Response(
