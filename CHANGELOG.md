@@ -7,6 +7,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Live map decoding closes its biggest consumer-visible gap: the
+`vw` / `vws` / `walls_info` / `sneak_areas` blocks the device emits
+on every saved-map blob now surface on `MapData`, and the recursive
+`tail.rism` saved-map embedding is decoded so the geometry comes
+through on live I-frames too. Plus an offline-tolerant map fetch path
+for idle / sleeping devices and a path-decoder bug fix.
+
+### Behavioural changes
+
+- **`MapData.virtualWalls` / `MapData.restrictedAreas` now populate
+  on live I-frames.** Previously they were always empty arrays on
+  the live channel: the device embeds the persistent saved-map blob
+  inside `tail.rism` (a base64 envelope of the same shape as the
+  outer frame), and the decoder didn't recurse into it.
+  `MapDecoder.decode` now decodes `tail.rism` when the outer tail's
+  geometry block is empty and merges the inner geometry onto the
+  outer `MapData`. Consumers that worked around this by deeply
+  decoding `tail.rism` themselves can drop the workaround. Outer
+  geometry wins when both are populated.
+- **`MapData.paths[].points` are now absolute world-frame mm for
+  `line`-type runs.** Previously emitted as the device's literal
+  on-wire values, which for `L`/`l` (line) ops are RELATIVE deltas
+  to the preceding sweep / sweep-and-mop / mop waypoint — so a
+  populated `tr` rendered as a tight artifact clustered around the
+  world origin. The parser now accumulates each delta against the
+  running anchor and seeds new line segments with the anchor itself,
+  so the trace is a continuous coverage path. The no-anchor edge
+  case (`tr` starts with `L`/`l` with no preceding absolute
+  waypoint) still emits literally.
+
+### Added
+
+- **`Vacuum.rememberOssPointer({ pointerStore? })` + `Vacuum.fetchMap
+  FromOss({ filename? })`.** Memoises the most recent `siid 6 piid 3`
+  (PATH) and `siid 6 piid 8` (POINTER_JSON) MQTT pushes; resolves
+  the cached pointer via the existing `OssFetcher` to return a
+  decoded `MapData` without any HTTP round-trip to the device. This
+  is the path the Dreamehome mobile app uses to render the map on
+  open even when the cloud's HTTP read is in code-80001 ack-timeout
+  state. `pointerStore` is an optional `{ read, write }` callback
+  pair so consumers can persist captures across process restarts;
+  the lib stays IO-free. Survives `unwatch()` — the cache outlives
+  the subscription. New `OssPointer` and `OssPointerStore` types
+  exported from `node-dreame`.
+- **`MapData.lowLyingAreas` (`MapLowLyingArea[]`).** X50 "sneak
+  under furniture" zones from the JSON tail's `sneak_areas` /
+  `sneak_areas_end` arrays. Polygon ROIs in mm world-frame —
+  surfaces points as-emitted rather than coercing to a bounding box,
+  matching Tasshack's parsing. `sneak_areas_end` is preferred when
+  both fields are present (it carries the saved `area` m² field).
+- **`MapData.wallsInfo` (`MapWallsInfo | null`).** Per-room wall
+  geometry from the saved-map blob's `walls_info` field — a typed
+  `{ versionFlag, storeys[].rooms[].walls[] }` tree where each wall
+  carries `type` (`0` = solid, `1` = opening), `from` / `to`
+  endpoints, and an inward-facing `normal` unit vector. Only
+  populated when a saved-map blob is in scope (live-stream I-frames
+  pick it up via the `tail.rism` recurse).
+- **`MapVirtualWall { kind?: "wall" | "threshold"; passable?: boolean }`.**
+  The `vw.line` virtual walls and the X50's `vws` threshold variants
+  now surface on the same array, discriminated by `kind`. When
+  `kind === "threshold"`, `passable: true` flags passable thresholds
+  (`vws.vwsl` when `vws.npthrsd` is present), `passable: false`
+  flags impassable thresholds (`vws.npthrsd`), and an absent
+  `passable` means a "virtual" threshold from older firmware that
+  doesn't split the two. Classic `vw.line` walls still emit without
+  either field for back-compat.
+- **`vw.nocpt`** parsed as additional no-go rectangles
+  (`MapRestrictedArea` with `kind: "noGo"`). NOT carpets despite
+  the wire-name; Tasshack `map.py:4668` reads them the same way.
+- **`parseFrame(inflated)`** in `node-dreame/map`. Composes
+  `parseMapHeader` + `sliceTailText` + `parseMapJsonTail` so callers
+  reaching past `MapDecoder.decode` can follow the same wire-shape
+  contract.
+- **`parsePointerJson(value)`** in `node-dreame/map`. Shared parser
+  for `siid 6 piid 8` (POINTER_JSON) values that accepts both
+  string and pre-parsed-object inputs and tolerates the
+  `obj_name` / `object_name` alias split.
+- **`parseTailGeometry` / `coalesceGeometry` / `isGeometryComplete` /
+  `MapGeometry`** in `node-dreame/map`. Aggregate decoder for every
+  geometry-bearing tail field plus the merge primitive used by the
+  rism-recurse path.
+- **`PERSISTENT_TAIL_KEYS`** constant exported from
+  `node-dreame/map`. The set of tail-JSON keys representing
+  persistent floor-plan / saved-map / cleaning-progress
+  configuration; `mergeTails` falls these back from prev when the
+  P-frame doesn't re-send them.
+
+### Changed
+
+- **P-frame tail merge falls back on more keys.** Previously
+  `mergeTails` only fell back `vw` and `decmap` when the P-frame's
+  tail didn't re-send them. Now also `vws`, `sneak_areas`,
+  `sneak_areas_end`, `walls_info`, and `rism` — all configuration
+  the device emits only on full snapshots, not on every P-frame.
+  Without the fall-through, the running merged state lost the
+  user's geometry between snapshots.
+
+### Documentation
+
+- **`docs/live-map-format.md`** JSON-tail field table expanded to
+  cover `vw.mop`, `vw.nocpt`, `vws.vwsl`, `vws.npthrsd`,
+  `sneak_areas` / `sneak_areas_end`. The previous claim that
+  `sneak_areas` had the same format as `vw.rect` was wrong (the
+  shape is `{id, type, hide, roi, area?}`) — fixed. The `rism` row
+  was rewritten from "not decoded" to describe the recursion
+  contract that now ships.
+- **`MapSegment.name` JSDoc** clarifies that the field is already
+  decoded from base64 — use as-is, do NOT double-decode. Empty
+  string (`""`) means "user has not named the room" (observed live
+  on r2532a 2026-05-07); `null` means `seg_inf` was missing
+  entirely. Renderers using `s.name || \`Room ${id}\`` work for
+  both cases; strict-null checks (`s.name === null ?`) miss the
+  empty-string case.
+- **`MapVirtualWall` JSDoc** documents the `kind` / `passable`
+  contract for thresholds across the X50 / older-firmware variants.
+
+### Refactors (no behavioural change)
+
+- **`src/map/decoder.ts` split** from 1165 lines into nine per-
+  concern modules: `envelope.ts` (base64 / AES / zlib unwrap),
+  `header.ts` (27-byte binary header), `tail.ts` (JSON tail +
+  `parseFrame` seam), `pixel-grid.ts` (fsm:1 pixel decode + segment
+  collect), `path.ts` (`tr` parser), `obstacles.ts`, `geometry.ts`
+  (`vw` / `vws` / `walls_info` / sneak-zones), `cleaned-area.ts`
+  (recursive `decmap` overlay), `field-utils.ts` (numeric coercion
+  helpers). `decoder.ts` itself now holds just the public
+  `MapDecoder` class. Public API unchanged — `node-dreame/map` re-
+  exports every moved symbol at its original name.
+- **`MapTail` and `RawSegInf` moved** from `src/map/decoder.ts` to
+  `src/map/types.ts` — they're the wire-shape contract for
+  everything in `src/map/`, not a decoder internal.
+- **`src/vacuum/oss-pointer.ts` extracted.** `OssPointerCache`
+  encapsulates the OSS-pointer capture / dedupe / persistence
+  machinery; `Vacuum` keeps thin delegating wrappers for
+  `rememberOssPointer` / `fetchMapFromOss` / `lastOssPointer*`.
+- **`parsePointerJson` deduped.** Three sites (`MapManager`'s
+  pointer-push handler, `Vacuum.fetchSavedMapList`,
+  `Vacuum.rememberOssPointer`) now share the helper.
+- **Rism-recurse cascade collapsed** from per-field if-statements
+  to a single `coalesceGeometry(outer, inner)` call.
+
+### Tests
+
+Suite is 307 tests (was 268 at v0.1.5 release; +39 covering the
+geometry parsers, path-delta accumulation, rism recurse, OSS-pointer
+cache, and `parsePointerJson`).
+
 ## [0.1.5] - 2026-05-06
 
 ### Breaking changes
