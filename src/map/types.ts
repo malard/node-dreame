@@ -124,12 +124,29 @@ export interface MapObstacle {
 }
 
 /**
- * One user-defined virtual wall — a line segment the robot won't cross.
- * Both endpoints are in mm, world-frame.
+ * One user-defined wall-shaped piece of geometry — a line segment in
+ * mm world-frame. Includes both classic virtual walls (`vw.line`) and
+ * the X50's threshold variants (`vws.vwsl` / `vws.npthrsd`); the
+ * `kind` and `passable` fields discriminate.
+ *
+ * `kind` defaults to `"wall"` when absent — older callers that
+ * pre-date the threshold split don't have to update.
+ *
+ * Threshold semantics (Tasshack `dev` `map.py:4678-4691`):
+ *   - `kind: "threshold", passable: true`   — passable threshold (X50 firmware
+ *     where the user has separately configured the impassable set)
+ *   - `kind: "threshold", passable: false`  — impassable threshold
+ *   - `kind: "threshold"` (no passable)     — "virtual" threshold from
+ *     older firmware that doesn't split passable/impassable
+ *   - `kind: "wall"` (or absent)            — classic virtual wall (`vw.line`)
  */
 export interface MapVirtualWall {
   from: MapPoint;
   to: MapPoint;
+  /** Defaults to `"wall"` when absent. */
+  kind?: "wall" | "threshold";
+  /** Only meaningful when `kind === "threshold"`. */
+  passable?: boolean;
 }
 
 /**

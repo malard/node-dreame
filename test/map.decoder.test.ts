@@ -388,6 +388,75 @@ describe("parseVirtualWalls", () => {
     expect(out.virtualWalls).toHaveLength(1);
     expect(out.restrictedAreas).toHaveLength(1);
   });
+
+  // A2: vw.nocpt is additional no-go rects, NOT carpets despite the name
+  // (Tasshack `dev` `map.py:4668`). Verified live 2026-05-07 on r2532a.
+  it("parses vw.nocpt as additional no-go rects", () => {
+    const out = parseVirtualWalls({
+      rect: [[0, 0, 100, 100]],
+      nocpt: [[-1150, 1100, -200, 2900]],
+    });
+    expect(out.restrictedAreas.map((a) => a.kind)).toEqual(["noGo", "noGo"]);
+    expect(out.restrictedAreas[1]!.bbox).toEqual({
+      xMin: -1150,
+      yMin: 1100,
+      xMax: -200,
+      yMax: 2900,
+    });
+  });
+
+  // A3: vws block — X50's threshold variants. vws.vwsl semantics flip
+  // on the presence of vws.npthrsd in the same block; vws.npthrsd is
+  // always the impassable set.
+  it("parses vws.npthrsd as impassable thresholds", () => {
+    const out = parseVirtualWalls(undefined, {
+      npthrsd: [[-7770, 11218, -7758, 12100]],
+    });
+    expect(out.virtualWalls).toEqual([
+      {
+        from: { x: -7770, y: 11218 },
+        to: { x: -7758, y: 12100 },
+        kind: "threshold",
+        passable: false,
+      },
+    ]);
+  });
+
+  it("treats vws.vwsl as passable thresholds when vws.npthrsd is non-empty", () => {
+    const out = parseVirtualWalls(undefined, {
+      vwsl: [[-3632, 11179, -3612, 11749]],
+      npthrsd: [[-7770, 11218, -7758, 12100]],
+    });
+    const passable = out.virtualWalls.filter(
+      (w) => w.kind === "threshold" && w.passable === true,
+    );
+    const impassable = out.virtualWalls.filter(
+      (w) => w.kind === "threshold" && w.passable === false,
+    );
+    expect(passable).toHaveLength(1);
+    expect(impassable).toHaveLength(1);
+  });
+
+  it("treats vws.vwsl as virtual thresholds when vws.npthrsd is absent", () => {
+    const out = parseVirtualWalls(undefined, {
+      vwsl: [[-3632, 11179, -3612, 11749]],
+    });
+    expect(out.virtualWalls).toHaveLength(1);
+    expect(out.virtualWalls[0]).toEqual({
+      from: { x: -3632, y: 11179 },
+      to: { x: -3612, y: 11749 },
+      kind: "threshold",
+    });
+    // No `passable` field — older firmware doesn't split passable from
+    // impassable, so we surface the threshold without committing.
+    expect(out.virtualWalls[0]!.passable).toBeUndefined();
+  });
+
+  it("does not stamp a kind on classic vw.line walls (back-compat)", () => {
+    const out = parseVirtualWalls({ line: [[0, 0, 100, 0]] });
+    expect(out.virtualWalls[0]!.kind).toBeUndefined();
+    expect(out.virtualWalls[0]!.passable).toBeUndefined();
+  });
 });
 
 // ─── parseCleanedAreaOverlay ────────────────────────────────────────

@@ -81,17 +81,17 @@ export class MapDecoder {
     const segments = canDecodePixels ? collectSegments(layers, dimensions, tail) : [];
     const paths = parsePathTr(tail.tr ?? "");
     const obstacles = parseObstacles(tail.ai_obstacle ?? []);
-    let { virtualWalls, restrictedAreas } = parseVirtualWalls(tail.vw);
+    let { virtualWalls, restrictedAreas } = parseVirtualWalls(tail.vw, tail.vws);
     // The persistent saved-map blob is embedded inline as `tail.rism`
     // (URL-safe-base64 + zlib + same envelope shape). On r2532a fw
-    // 4.3.9_2199 the outer tail's `vw` is absent and the geometry
-    // lives only in the inner saved-map's tail. Recurse to surface
-    // it; if the inner blob fails to decode (corrupt, unexpected
-    // shape, missing AES IV, etc.) leave the outer values as-is and
-    // swallow the error — geometry decode failure must never break
-    // pixel/path/obstacle decode of the outer frame. Recurses one
-    // level only — the inner saved-map blob does not carry its own
-    // `rism`.
+    // 4.3.9_2199 the outer tail's `vw`/`vws` are absent and the
+    // geometry lives only in the inner saved-map's tail. Recurse to
+    // surface it; if the inner blob fails to decode (corrupt,
+    // unexpected shape, missing AES IV, etc.) leave the outer values
+    // as-is and swallow the error — geometry decode failure must
+    // never break pixel/path/obstacle decode of the outer frame.
+    // Recurses one level only — the inner saved-map blob does not
+    // carry its own `rism`.
     if (
       (virtualWalls.length === 0 || restrictedAreas.length === 0) &&
       typeof tail.rism === "string" &&
@@ -101,7 +101,7 @@ export class MapDecoder {
         const innerInflated = unwrapEnvelope(tail.rism);
         const innerHeader = parseMapHeader(innerInflated);
         const innerTail = parseMapJsonTail(sliceTailText(innerInflated, innerHeader));
-        const inner = parseVirtualWalls(innerTail.vw);
+        const inner = parseVirtualWalls(innerTail.vw, innerTail.vws);
         if (virtualWalls.length === 0 && inner.virtualWalls.length > 0) {
           virtualWalls = inner.virtualWalls;
         }
@@ -328,22 +328,47 @@ export interface MapTail {
    */
   decmap?: string;
   /**
-   * User-defined geometry block — virtual walls, no-go zones, no-mop
-   * zones, and explicit carpet add/remove markers. All inner arrays
-   * carry mm in the world frame. See `parseVirtualWalls`.
+   * User-defined geometry block (classic) — virtual walls, no-go
+   * zones, no-mop zones, no-go "do not cross" rects, and explicit
+   * carpet add markers. All inner arrays carry mm in the world frame.
+   * See `parseVirtualWalls`.
    *
    * Wire format (Tasshack `dev` `map.py:4656-4669`):
-   *   `{ line: [[x0,y0,x1,y1], ...],
-   *      rect: [[x0,y0,x1,y1, angle?], ...],
-   *      mop:  [[x0,y0,x1,y1, angle?], ...],
-   *      addcpt: [...], nocpt: [...] }`
+   *   `{ line:   [[x0,y0,x1,y1], ...],
+   *      rect:   [[x0,y0,x1,y1, angle?], ...],
+   *      mop:    [[x0,y0,x1,y1, angle?], ...],
+   *      cliff:  [[x0,y0,x1,y1], ...],            // observed empty on r2532a
+   *      nocpt:  [[x0,y0,x1,y1], ...],            // additional no-go rects
+   *      addcpt: [[x0,y0,x1,y1, segId, ...], …]   // carpet polygons w/ shape codes
+   *   }`
    */
   vw?: {
     line?: number[][];
     rect?: number[][];
     mop?: number[][];
+    cliff?: number[][];
+    nocpt?: number[][];
     addcpt?: unknown[];
-    nocpt?: unknown[];
+  };
+  /**
+   * X50 threshold block — only present when the user has configured
+   * thresholds in the app. See `parseVirtualWalls`.
+   *
+   * Wire format (Tasshack `dev` `map.py:4678-4691`):
+   *   `{ vwsl:    [[x0,y0,x1,y1], ...],
+   *      npthrsd: [[x0,y0,x1,y1], ...],
+   *      ramp:    [[…polygon…], ...],   // observed empty on r2532a
+   *      cliff:   [[x0,y0,x1,y1], ...]
+   *   }`
+   *
+   * `vwsl` semantics flip on the presence of `npthrsd` in the same
+   * block — see `parseVirtualWalls`.
+   */
+  vws?: {
+    vwsl?: number[][];
+    npthrsd?: number[][];
+    ramp?: unknown[];
+    cliff?: number[][];
   };
   /**
    * Embedded saved-map blob — the persistent floor plan, encoded as
@@ -697,7 +722,10 @@ export function parsePathTr(tr: string): MapPath[] {
     }
     if (type === "line" && anchor !== null) {
       // Accumulate the relative delta against the running anchor.
-      const abs = { x: anchor.x + xRaw, y: anchor.y + yRaw };
+      const abs: { x: number; y: number } = {
+        x: anchor.x + xRaw,
+        y: anchor.y + yRaw,
+      };
       if (!current || current.type !== type) {
         // New line segment: seed with the anchor itself so the line
         // draws a continuous trace from the preceding waypoint.
@@ -771,67 +799,130 @@ export function parseObstacles(raw: unknown[]): MapObstacle[] {
 }
 
 /**
- * Parse the `vw` block — Dreame's user-defined geometry. Tasshack
- * `dev` `map.py:4597-4669` is the canonical reference; we mirror its
- * shape interpretations:
+ * Parse the `vw` (and optional `vws`) blocks — Dreame's user-defined
+ * geometry. Tasshack `dev` `map.py:4597-4702` is the canonical
+ * reference; we mirror its shape interpretations:
  *
- *   - `vw.line`: array of `[x0,y0,x1,y1]` line segments — each is a
- *     single virtual wall, NOT a polyline.
- *   - `vw.rect`: array of `[x0,y0,x1,y1, angle?]` axis-aligned no-go
- *     rectangles. Tasshack sorts the corners; we do the same so the
- *     bbox is well-formed regardless of which order the wire used.
- *   - `vw.mop`: same shape as `vw.rect` but for no-mop zones.
+ * `vw` (classic block):
+ *   - `vw.line`: `[x0,y0,x1,y1]` line segments — virtual walls.
+ *   - `vw.rect`: `[x0,y0,x1,y1, angle?]` axis-aligned no-go
+ *     rectangles. Corners get sorted so the bbox is well-formed
+ *     regardless of wire order.
+ *   - `vw.mop`: same shape as `vw.rect`, no-mop zones.
+ *   - `vw.nocpt`: `[x0,y0,x1,y1]` "do not cross" no-go rectangles —
+ *     verified live 2026-05-07 on r2532a as additional no-go zones
+ *     the user marked in the app. (Note: NOT carpets despite the
+ *     name; Tasshack `map.py:4668` reads them as no-go rects.)
  *
- * `addcpt` / `nocpt` (carpet add/remove markers) are intentionally
- * skipped — the carpet pixel layer already comes from the pixel grid
- * via `decodePixelGridFsm1`'s low-bits-11 path; the wire format for
- * the explicit add/remove markers hasn't been observed live yet.
+ * `vws` (X50 threshold block — only present when the user has
+ * configured thresholds; absent on older firmware):
+ *   - `vws.vwsl`: `[x0,y0,x1,y1]` lines. When `vws.npthrsd` is
+ *     present in the SAME `vws` object, these are *passable*
+ *     thresholds (`kind: "threshold", passable: true`). When
+ *     `npthrsd` is absent, they're "virtual" thresholds
+ *     (`kind: "threshold"` with no `passable` hint).
+ *   - `vws.npthrsd`: `[x0,y0,x1,y1]` lines — *impassable* thresholds
+ *     (`kind: "threshold", passable: false`). Verified live
+ *     2026-05-07 on r2532a fw 4.3.9_2199.
  *
- * Returns empty arrays when `vw` is absent or empty — there's no
- * meaningful difference between "no virtual walls configured" and
- * "this frame doesn't carry the field" at the public-API layer, and
- * the merge layer handles the latter via fallback.
+ * `vw.cliff` and `vws.cliff` (line segments) and `vws.ramp` (areas)
+ * have been observed empty on r2532a; they're not surfaced here
+ * until a fixture exists for the populated form. `vw.addcpt` /
+ * `vws.rec_*` recommendation mirrors are also out of scope for now.
+ *
+ * Returns empty arrays when both blocks are absent — there's no
+ * meaningful difference between "no walls configured" and "this
+ * frame doesn't carry the field" at the public-API layer, and the
+ * merge layer + rism recurse handle the latter via fallback.
  */
 export function parseVirtualWalls(
-  vw: { line?: number[][]; rect?: number[][]; mop?: number[][] } | undefined,
+  vw:
+    | {
+        line?: number[][];
+        rect?: number[][];
+        mop?: number[][];
+        nocpt?: number[][];
+      }
+    | undefined,
+  vws?: { vwsl?: number[][]; npthrsd?: number[][] } | undefined,
 ): { virtualWalls: MapVirtualWall[]; restrictedAreas: MapRestrictedArea[] } {
-  if (!vw) {
-    return { virtualWalls: [], restrictedAreas: [] };
-  }
-
   const virtualWalls: MapVirtualWall[] = [];
-  for (const line of vw.line ?? []) {
-    if (!Array.isArray(line) || line.length < 4) {
-      continue;
+  const restrictedAreas: MapRestrictedArea[] = [];
+
+  if (vw) {
+    for (const line of vw.line ?? []) {
+      const wall = parseLine(line, "wall");
+      if (wall) {
+        virtualWalls.push(wall);
+      }
     }
-    const x0 = parseFloatField(line[0]);
-    const y0 = parseFloatField(line[1]);
-    const x1 = parseFloatField(line[2]);
-    const y1 = parseFloatField(line[3]);
-    if (x0 === null || y0 === null || x1 === null || y1 === null) {
-      continue;
+    for (const rect of vw.rect ?? []) {
+      const area = parseRestrictedArea("noGo", rect);
+      if (area) {
+        restrictedAreas.push(area);
+      }
     }
-    virtualWalls.push({
-      from: { x: x0, y: y0 },
-      to: { x: x1, y: y1 },
-    });
+    for (const rect of vw.mop ?? []) {
+      const area = parseRestrictedArea("noMop", rect);
+      if (area) {
+        restrictedAreas.push(area);
+      }
+    }
+    for (const rect of vw.nocpt ?? []) {
+      const area = parseRestrictedArea("noGo", rect);
+      if (area) {
+        restrictedAreas.push(area);
+      }
+    }
   }
 
-  const restrictedAreas: MapRestrictedArea[] = [];
-  for (const rect of vw.rect ?? []) {
-    const area = parseRestrictedArea("noGo", rect);
-    if (area) {
-      restrictedAreas.push(area);
+  if (vws) {
+    const npthrsdPresent = Array.isArray(vws.npthrsd) && vws.npthrsd.length > 0;
+    for (const line of vws.vwsl ?? []) {
+      // vwsl semantics flip on the presence of npthrsd in the same block.
+      const wall = parseLine(line, "threshold");
+      if (wall) {
+        if (npthrsdPresent) {
+          wall.passable = true;
+        }
+        // else: leave `passable` absent — these are "virtual" thresholds
+        // from older firmware that doesn't split the two.
+        virtualWalls.push(wall);
+      }
     }
-  }
-  for (const rect of vw.mop ?? []) {
-    const area = parseRestrictedArea("noMop", rect);
-    if (area) {
-      restrictedAreas.push(area);
+    for (const line of vws.npthrsd ?? []) {
+      const wall = parseLine(line, "threshold");
+      if (wall) {
+        wall.passable = false;
+        virtualWalls.push(wall);
+      }
     }
   }
 
   return { virtualWalls, restrictedAreas };
+}
+
+function parseLine(
+  raw: unknown,
+  kind: "wall" | "threshold",
+): MapVirtualWall | null {
+  if (!Array.isArray(raw) || raw.length < 4) {
+    return null;
+  }
+  const x0 = parseFloatField(raw[0]);
+  const y0 = parseFloatField(raw[1]);
+  const x1 = parseFloatField(raw[2]);
+  const y1 = parseFloatField(raw[3]);
+  if (x0 === null || y0 === null || x1 === null || y1 === null) {
+    return null;
+  }
+  // `kind` is omitted from the emitted object when it would be the
+  // default ("wall"), matching the historical wire-empty case so
+  // identity comparisons in existing tests don't break unnecessarily.
+  if (kind === "wall") {
+    return { from: { x: x0, y: y0 }, to: { x: x1, y: y1 } };
+  }
+  return { from: { x: x0, y: y0 }, to: { x: x1, y: y1 }, kind };
 }
 
 /**

@@ -34,7 +34,7 @@ interface SavedMapWrapper {
 }
 
 describe("MapDecoder.decode — rism recurse (A1)", () => {
-  it("decodes vw from a saved-map blob's top-level tail (no recursion needed)", () => {
+  it("decodes vw + vws from a saved-map blob's top-level tail (no recursion needed)", () => {
     if (!fs.existsSync(FIXTURE)) {
       // Fixture is required; surface a helpful error rather than skipping
       // silently — CI shouldn't pretend all is well if the fixture is gone.
@@ -46,13 +46,26 @@ describe("MapDecoder.decode — rism recurse (A1)", () => {
     expect(innerB64!.length).toBeGreaterThan(0);
 
     const data = MapDecoder.decode(innerB64!);
-    // Per fixture provenance: 2 virtual walls (vw.line), 1 no-go rect
-    // is in vw.nocpt (NOT YET extracted by parseVirtualWalls — covered
-    // by A2). vws.{vwsl, npthrsd} carry 5 more walls / thresholds —
-    // also NOT YET extracted (A3). For A1 we only assert the outer
-    // path surfaces the line-segment walls already covered by the
-    // existing parser.
-    expect(data.virtualWalls.length).toBe(2);
+    // Fixture provenance (test/fixtures/saved-maps/README.md):
+    //   vw.line  = 2 virtual walls       → kind: "wall" (or absent)
+    //   vw.nocpt = 1 no-go rect          → restrictedAreas
+    //   vws.vwsl    = 3 passable thresholds  → kind: "threshold", passable: true
+    //                                         (because npthrsd is also present)
+    //   vws.npthrsd = 2 impassable thresholds → kind: "threshold", passable: false
+    expect(data.virtualWalls.length).toBe(2 + 3 + 2);
+    const walls = data.virtualWalls.filter((w) => (w.kind ?? "wall") === "wall");
+    const passable = data.virtualWalls.filter(
+      (w) => w.kind === "threshold" && w.passable === true,
+    );
+    const impassable = data.virtualWalls.filter(
+      (w) => w.kind === "threshold" && w.passable === false,
+    );
+    expect(walls).toHaveLength(2);
+    expect(passable).toHaveLength(3);
+    expect(impassable).toHaveLength(2);
+    // vw.nocpt → 1 additional no-go rect alongside the empty vw.rect/mop.
+    const noGo = data.restrictedAreas.filter((a) => a.kind === "noGo");
+    expect(noGo).toHaveLength(1);
   });
 
   it("recurses into tail.rism when outer tail has no vw block", () => {
@@ -70,9 +83,9 @@ describe("MapDecoder.decode — rism recurse (A1)", () => {
     const outer = buildOuterEnvelopeWithRism(savedMapB64!);
     const data = MapDecoder.decode(outer);
 
-    // The outer's own tail had no vw — but the rism recurse should
-    // surface the inner's 2 line-segment virtual walls.
-    expect(data.virtualWalls.length).toBe(2);
+    // Outer had no vw; rism recurse should surface ALL inner walls
+    // (2 vw.line + 3 vws.vwsl + 2 vws.npthrsd = 7).
+    expect(data.virtualWalls.length).toBe(7);
   });
 
   it("prefers the outer's vw when the outer has its own non-empty vw", () => {
