@@ -19,7 +19,7 @@ import {
   type OssInputBase,
 } from "./map/index.js";
 import { getCapabilities, type DeviceCapabilities } from "./capabilities.js";
-import type { CallOptions } from "./commands.js";
+import type { CallOptions, MiotAction, MiotProp } from "./commands.js";
 import {
   BATTERY_PROP,
   CLOUD_OBJ_PROP,
@@ -142,6 +142,52 @@ export type VerifyMqttResult =
   | { reason: "not-watching"; echoMs: null; echoCount: 0 };
 
 /**
+ * One captured OSS object pointer the device has pushed at some point
+ * during the lifetime of `Vacuum.rememberOssPointer()`. The signed
+ * download URL is NOT cached here — it's resolved on demand via
+ * `OssFetcher`, which manages its own short-lived URL cache. The
+ * pointer here is the long-lived part: the OSS object name plus the
+ * MQTT push that surfaced it. OSS object lifetimes on the Dreame
+ * regional bucket are weeks-stable in practice — long enough that a
+ * pointer captured during one session reliably resolves in the next.
+ */
+export interface OssPointer {
+  /** Bare OSS object name (e.g. `ali_dreame/<uid>/<did>/<n>`). */
+  filename: string;
+  /**
+   * Which property surfaced this pointer:
+   *   - `"path"` — siid 6 piid 3 (`PATH` push). Live I-frame; on
+   *     r2532a the saved-map blob is embedded inside this frame's
+   *     `tail.rism`, so `MapDecoder.decode` recurses to surface the
+   *     full geometry.
+   *   - `"pointerJson"` — siid 6 piid 8 (`POINTER_JSON` push). The
+   *     saved-map list wrapper (the body that `decodeSavedMapList`
+   *     parses).
+   */
+  source: "path" | "pointerJson";
+  /** ISO-8601 timestamp of when the pointer was last captured / refreshed. */
+  seenAt: string;
+  /** md5 hint from the wire — only present on `source: "pointerJson"` pushes. */
+  md5?: string;
+}
+
+/**
+ * Optional persistence callback for `Vacuum.rememberOssPointer()`.
+ * The lib stays IO-free; consumers wire up the actual filesystem /
+ * keyvalue store and pass `read` / `write` functions.
+ *
+ * - `read()` is called once when `rememberOssPointer()` is called, to
+ *   restore any pointer captured in a previous session.
+ * - `write(pointer)` is called every time a fresh pointer is captured
+ *   on the wire (and only when the pointer's `filename` actually
+ *   changed — same-filename re-pushes are deduped at the lib layer).
+ */
+export interface OssPointerStore {
+  read(): OssPointer[] | null;
+  write(pointers: readonly OssPointer[]): void;
+}
+
+/**
  * Cumulative lifetime stats from the device's totals service (siid 12).
  * Returned by `Vacuum.fetchTotals()`.
  */
@@ -209,6 +255,9 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
   #mapManager: MapManager | null = null;
   #ossFetcher: OssFetcher | null = null;
   #capabilities: DeviceCapabilities | null = null;
+  #pointers: Map<"path" | "pointerJson", OssPointer> = new Map();
+  #pointerStore: OssPointerStore | null = null;
+  #pointerCaptureAttached = false;
 
   constructor(client: DreameClient, device: DreameDevice) {
     super();
@@ -242,9 +291,14 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * expecting non-null values across the board. Call `refresh()`
    * opportunistically — when it acks, you get a full snapshot;
    * when it no-acks, you've lost nothing.
+   *
+   * The returned object is the live internal snapshot — do not
+   * mutate. A new snapshot is allocated on every property change,
+   * so callers can compare references to detect "did anything
+   * change" without a deep diff.
    */
   get state(): VacuumState {
-    return { ...this.#state };
+    return this.#state;
   }
 
   /**
@@ -302,11 +356,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     let kind: "acked" | "no-ack" = "acked";
     try {
       const results = await this.#client.getProperties(this.device.did, props, opts);
-      for (const r of results) {
-        if (r.code === 0 && r.value !== undefined) {
-          this.#applyChange(r.siid, r.piid, r.value);
-        }
-      }
+      this.#applyBatch(results.filter((r) => r.code === 0 && r.value !== undefined));
       this.#setOnline(true);
     } catch (err) {
       if (err instanceof DreameDeviceOfflineError) {
@@ -332,13 +382,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     this.#setOnline(true);
 
     this.#subscription.on("properties", (changes: PropertyChange[]) => {
-      let dirty = false;
-      for (const c of changes) {
-        if (this.#applyChange(c.siid, c.piid, c.value)) {
-          dirty = true;
-        }
-      }
-      if (dirty) {
+      if (this.#applyBatch(changes)) {
         this.emit("change", this.state);
       }
     });
@@ -419,11 +463,17 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       sub.on("properties", onProps);
     });
 
-    // Best-effort write a no-op VOLUME back to itself. Read first to get
-    // the current value; on either side, swallow HTTP errors — 80001
-    // does NOT mean the action failed (see `DreameDeviceOfflineError`),
-    // and the MQTT echo (or its absence) is what we actually care about.
-    let writeValue = 50;
+    // Best-effort write VOLUME back to its current value as a true
+    // no-op trigger. We MUST NOT write a guessed default here — the
+    // device's voice volume is user-facing, and a verify probe that
+    // silently bumps it to 50 is worse than failing to provoke an
+    // echo. So: only write if we actually read the current value
+    // back from the device; otherwise skip the trigger and rely on
+    // organic pushes (mop pulse, washboard countdown, etc.) to
+    // satisfy the echo wait. Either way, swallow 80001 from each
+    // round-trip — that error is misleading on a healthy device
+    // (see `DreameDeviceOfflineError`).
+    let writeValue: number | null = null;
     try {
       const reads = await this.#client.getProperties(this.device.did, [SETTINGS_PROP.VOLUME]);
       const cur = reads[0];
@@ -435,13 +485,15 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
         throw err;
       }
     }
-    try {
-      await this.#client.setProperties(this.device.did, [
-        { ...SETTINGS_PROP.VOLUME, value: writeValue },
-      ]);
-    } catch (err) {
-      if (!(err instanceof DreameDeviceOfflineError)) {
-        throw err;
+    if (writeValue !== null) {
+      try {
+        await this.#client.setProperties(this.device.did, [
+          { ...SETTINGS_PROP.VOLUME, value: writeValue },
+        ]);
+      } catch (err) {
+        if (!(err instanceof DreameDeviceOfflineError)) {
+          throw err;
+        }
       }
     }
 
@@ -460,6 +512,13 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     }
     const sub = this.#subscription;
     this.#subscription = null;
+    // Pointer-capture is bound to the subscription's listener; once
+    // the subscription closes, the listener goes with it. Clear the
+    // attached flag so a subsequent watch() + rememberOssPointer()
+    // re-attaches against the fresh subscription. The pointer cache
+    // itself survives — the whole point is for it to outlive the
+    // subscription.
+    this.#pointerCaptureAttached = false;
     if (sub) {
       await sub.close();
     }
@@ -522,9 +581,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * executed the action; watch MQTT for confirmation).
    */
   start(): Promise<ActionResult> {
-    return this.#tolerate80001(() =>
-      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.START, in: [] }),
-    );
+    return this.#emptyAction(VACUUM_ACTION.START);
   }
 
   /**
@@ -533,9 +590,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * actually pause? — still untested.
    */
   pause(): Promise<ActionResult> {
-    return this.#tolerate80001(() =>
-      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.PAUSE, in: [] }),
-    );
+    return this.#emptyAction(VACUUM_ACTION.PAUSE);
   }
 
   /**
@@ -543,9 +598,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * while idle). Behaviour during an active task still untested.
    */
   stop(): Promise<ActionResult> {
-    return this.#tolerate80001(() =>
-      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.STOP, in: [] }),
-    );
+    return this.#emptyAction(VACUUM_ACTION.STOP);
   }
 
   /**
@@ -554,30 +607,22 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * recall the robot? — still untested.
    */
   dock(): Promise<ActionResult> {
-    return this.#tolerate80001(() =>
-      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.CHARGE, in: [] }),
-    );
+    return this.#emptyAction(VACUUM_ACTION.CHARGE);
   }
 
   /** VERIFIED on r2532a 2026-05-02 — robot beeps. */
   locate(): Promise<ActionResult> {
-    return this.#tolerate80001(() =>
-      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.LOCATE, in: [] }),
-    );
+    return this.#emptyAction(VACUUM_ACTION.LOCATE);
   }
 
   /** VERIFIED on r2532a 2026-05-02 — returned code 0 with no warning to clear. */
   clearWarning(): Promise<ActionResult> {
-    return this.#tolerate80001(() =>
-      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.CLEAR_WARNING, in: [] }),
-    );
+    return this.#emptyAction(VACUUM_ACTION.CLEAR_WARNING);
   }
 
   /** ASSUMED action mapping — NOT YET verified on r2532a. */
   startAutoEmpty(): Promise<ActionResult> {
-    return this.#tolerate80001(() =>
-      this.#client.callAction(this.device.did, { ...VACUUM_ACTION.START_AUTO_EMPTY, in: [] }),
-    );
+    return this.#emptyAction(VACUUM_ACTION.START_AUTO_EMPTY);
   }
 
   // ─── semantic action helpers ──────────────────────────────────────
@@ -851,6 +896,158 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     return decodeSavedMapList(bytes);
   }
 
+  // ─── OSS pointer caching ──────────────────────────────────────────
+
+  /**
+   * Memoise the most recent OSS-object pointers the device pushes via
+   * MQTT. Once enabled, every `siid 6 piid 3` (PATH) and `siid 6 piid 8`
+   * (POINTER_JSON) push is captured into an in-memory cache; consumers
+   * pull the cached pointer via `lastOssPointer()` and turn it into a
+   * decoded map via `fetchMapFromOss()` — no `getProperties` round-trip
+   * required.
+   *
+   * **Why this exists:** the Dreamehome mobile app shows the saved map
+   * immediately on open even when the device's HTTP path is in code-
+   * 80001 ack-timeout state. It does this by caching the OSS object
+   * name from a previous PATH push and re-fetching the OSS blob
+   * directly. `fetchSavedMapList()` here depends on a successful
+   * `getProperties(siid 6 piid 8)` and returns `null` when the cloud
+   * 80001s; for an idle / sleeping device that's most of the time.
+   * `rememberOssPointer()` + `fetchMapFromOss()` is the lib's path to
+   * the same outcome — works whether the device is awake, asleep, or
+   * even powered off (within the OSS object's TTL, which is
+   * weeks-stable in practice).
+   *
+   * Requires `watch()` to be active — pointers arrive via the MQTT
+   * subscription. Idempotent: a second call replaces the optional
+   * `pointerStore` with the new one but doesn't double-subscribe.
+   *
+   * If `pointerStore.read()` returns previously-saved pointers, the
+   * cache is seeded with them so `fetchMapFromOss()` works on first
+   * call without waiting for a fresh push.
+   *
+   * `pointerStore.write()` is invoked when a pointer is captured for
+   * the first time, when a pointer's filename changes, or when its
+   * md5 changes (POINTER_JSON only) — same-pointer re-pushes are
+   * deduped to avoid pointless writes.
+   */
+  rememberOssPointer(opts: { pointerStore?: OssPointerStore } = {}): void {
+    if (!this.#subscription) {
+      throw new DreameTransportError(
+        "rememberOssPointer: no active MQTT subscription — call watch() first",
+      );
+    }
+    if (opts.pointerStore !== undefined) {
+      this.#pointerStore = opts.pointerStore;
+      const restored = opts.pointerStore.read();
+      if (restored) {
+        for (const p of restored) {
+          this.#pointers.set(p.source, p);
+        }
+      }
+    }
+    if (this.#pointerCaptureAttached) {
+      return;
+    }
+    this.#pointerCaptureAttached = true;
+    this.#subscription.on("properties", (changes: PropertyChange[]) => {
+      let dirty = false;
+      for (const c of changes) {
+        if (c.siid !== CLOUD_OBJ_PROP.PATH.siid) {
+          continue;
+        }
+        if (c.piid === CLOUD_OBJ_PROP.PATH.piid && typeof c.value === "string" && c.value.length > 0) {
+          if (this.#applyPointerCapture("path", c.value)) {
+            dirty = true;
+          }
+        } else if (
+          c.piid === CLOUD_OBJ_PROP.POINTER_JSON.piid &&
+          typeof c.value === "string" &&
+          c.value.length > 0
+        ) {
+          let parsed: { obj_name?: unknown; object_name?: unknown; md5?: unknown };
+          try {
+            parsed = JSON.parse(c.value) as typeof parsed;
+          } catch {
+            continue;
+          }
+          const objNameRaw = parsed.obj_name ?? parsed.object_name;
+          if (typeof objNameRaw !== "string" || objNameRaw.length === 0) {
+            continue;
+          }
+          const md5 = typeof parsed.md5 === "string" ? parsed.md5 : undefined;
+          if (this.#applyPointerCapture("pointerJson", objNameRaw, md5)) {
+            dirty = true;
+          }
+        }
+      }
+      if (dirty && this.#pointerStore) {
+        this.#pointerStore.write(this.lastOssPointers());
+      }
+    });
+  }
+
+  /** Latest captured pointer for one source, or `null` if never seen. */
+  lastOssPointer(source: "path" | "pointerJson" = "path"): OssPointer | null {
+    return this.#pointers.get(source) ?? null;
+  }
+
+  /** All captured pointers, latest-only per source. */
+  lastOssPointers(): readonly OssPointer[] {
+    return [...this.#pointers.values()];
+  }
+
+  /**
+   * Fetch and decode an OSS map blob using the cached pointer (or a
+   * caller-supplied `filename`). No HTTP round-trip to the device.
+   *
+   * Requires `rememberOssPointer()` to have been called first (so a
+   * pointer has been captured / restored), unless `opts.filename` is
+   * passed explicitly.
+   *
+   * Throws `DreameTransportError` when no pointer is available.
+   * Throws the underlying `OssFetcher` errors on network / decode
+   * failure — those are real problems, not the cloud's misleading
+   * 80001 case `fetchSavedMapList` swallows.
+   */
+  async fetchMapFromOss(opts: { filename?: string } = {}): Promise<MapData> {
+    const filename = opts.filename ?? this.#pointers.get("path")?.filename;
+    if (typeof filename !== "string" || filename.length === 0) {
+      throw new DreameTransportError(
+        "fetchMapFromOss: no PATH pointer cached — call rememberOssPointer() first or pass `filename`",
+      );
+    }
+    const { fetcher, base } = this.#requireOssContext("fetchMapFromOss");
+    const bytes = await fetcher.fetchBlob({ ...base, filename });
+    return MapDecoder.decode(bytes.toString("utf8"));
+  }
+
+  /**
+   * Apply a pointer capture; returns true if the cache actually
+   * changed (filename or md5 differs from the prior entry for this
+   * source). Same-content re-pushes return false.
+   */
+  #applyPointerCapture(
+    source: "path" | "pointerJson",
+    filename: string,
+    md5?: string,
+  ): boolean {
+    const prev = this.#pointers.get(source);
+    if (prev && prev.filename === filename && prev.md5 === md5) {
+      return false;
+    }
+    const next: OssPointer = {
+      filename,
+      source,
+      seenAt: new Date().toISOString(),
+    };
+    if (md5 !== undefined) {
+      next.md5 = md5;
+    }
+    this.#pointers.set(source, next);
+    return true;
+  }
+
   // ─── settings ──────────────────────────────────────────────────────
 
   /**
@@ -858,20 +1055,12 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * `Standard → Quiet → Standard` confirmed via property read-back.
    */
   setSuction(level: SuctionLevel): Promise<ActionResult> {
-    return this.#tolerate80001(() =>
-      this.#client.setProperties(this.device.did, [
-        { ...VACUUM_PROP.SUCTION_LEVEL, value: level },
-      ]),
-    );
+    return this.#singlePropWrite(VACUUM_PROP.SUCTION_LEVEL, level);
   }
 
   /** ASSUMED enum — NOT YET verified end-to-end on r2532a. */
   setWaterVolume(level: WaterVolume): Promise<ActionResult> {
-    return this.#tolerate80001(() =>
-      this.#client.setProperties(this.device.did, [
-        { ...VACUUM_PROP.WATER_VOLUME, value: level },
-      ]),
-    );
+    return this.#singlePropWrite(VACUUM_PROP.WATER_VOLUME, level);
   }
 
   /**
@@ -879,11 +1068,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * Caller is responsible for passing a correct raw int until the bitfield is decoded.
    */
   setCleaningMode(mode: CleaningMode | number): Promise<ActionResult> {
-    return this.#tolerate80001(() =>
-      this.#client.setProperties(this.device.did, [
-        { ...VACUUM_PROP.CLEANING_MODE, value: mode },
-      ]),
-    );
+    return this.#singlePropWrite(VACUUM_PROP.CLEANING_MODE, mode);
   }
 
   /**
@@ -894,11 +1079,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     if (volume < 0 || volume > 100) {
       throw new RangeError("volume must be 0-100");
     }
-    return this.#tolerate80001(() =>
-      this.#client.setProperties(this.device.did, [
-        { ...SETTINGS_PROP.VOLUME, value: volume },
-      ]),
-    );
+    return this.#singlePropWrite(SETTINGS_PROP.VOLUME, volume);
   }
 
   /**
@@ -1028,6 +1209,20 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     }
   }
 
+  /** Dispatch a no-arg MIoT action through the 80001-tolerant wrapper. */
+  #emptyAction(action: MiotAction): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.callAction(this.device.did, { ...action, in: [] }),
+    );
+  }
+
+  /** Write a single MIoT property through the 80001-tolerant wrapper. */
+  #singlePropWrite(prop: MiotProp, value: unknown): Promise<ActionResult> {
+    return this.#tolerate80001(() =>
+      this.#client.setProperties(this.device.did, [{ ...prop, value }]),
+    );
+  }
+
   #setOnline(online: boolean): void {
     if (this.#state.online === online) {
       return;
@@ -1036,25 +1231,43 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     this.emit("change", this.state);
   }
 
-  /** Returns true if the value actually changed. */
-  #applyChange(siid: number, piid: number, value: unknown): boolean {
-    const handler = APPLIERS[propKey({ siid, piid })];
-    if (!handler) {
-      return false;
-    }
-    const num = typeof value === "number" ? value : null;
-    const patch = handler(num);
-    let changed = false;
-    for (const k of Object.keys(patch) as Array<keyof VacuumState>) {
-      if (this.#state[k] !== patch[k]) {
-        changed = true;
-        break;
+  /**
+   * Apply a batch of property changes in a single state replacement.
+   * Returns true if any change actually moved a field, false otherwise.
+   *
+   * Allocates at most one new state object per batch (vs the previous
+   * per-change spread). Hot path: MQTT `properties_changed` pushes can
+   * carry several entries, and high-frequency channels (mop rotation
+   * pulse, washboard countdown) fire many times per second.
+   */
+  #applyBatch(
+    changes: ReadonlyArray<{ siid: number; piid: number; value?: unknown }>,
+  ): boolean {
+    let next: VacuumState | null = null;
+    for (const c of changes) {
+      const handler = APPLIERS[propKey(c)];
+      if (!handler) {
+        continue;
+      }
+      const num = typeof c.value === "number" ? c.value : null;
+      const patch = handler(num);
+      const cur: VacuumState = next ?? this.#state;
+      let differs = false;
+      for (const k of Object.keys(patch) as Array<keyof VacuumState>) {
+        if (cur[k] !== patch[k]) {
+          differs = true;
+          break;
+        }
+      }
+      if (differs) {
+        next = { ...cur, ...patch };
       }
     }
-    if (changed) {
-      this.#state = { ...this.#state, ...patch };
+    if (next) {
+      this.#state = next;
+      return true;
     }
-    return changed;
+    return false;
   }
 }
 
