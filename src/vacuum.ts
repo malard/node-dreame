@@ -14,6 +14,7 @@ import {
   MapManager,
   OssFetcher,
   clientFrameRequester,
+  parsePointerJson,
   type MapData,
   type MapSavedList,
   type OssInputBase,
@@ -875,24 +876,15 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       throw err;
     }
     const pointer = pointerResults[0];
-    if (!pointer || pointer.code !== 0 || typeof pointer.value !== "string" || !pointer.value) {
+    if (!pointer || pointer.code !== 0) {
       return null;
     }
-    let parsed: { object_name?: unknown; obj_name?: unknown };
-    try {
-      parsed = JSON.parse(pointer.value) as typeof parsed;
-    } catch {
+    const parsed = parsePointerJson(pointer.value);
+    if (!parsed) {
       return null;
     }
-    // Dreame native publishes `object_name`; older notes / Tasshack docs
-    // sometimes call it `obj_name`. Accept either.
-    const objNameRaw = parsed.object_name ?? parsed.obj_name;
-    if (typeof objNameRaw !== "string" || !objNameRaw) {
-      return null;
-    }
-    const objName: string = objNameRaw;
     const { fetcher, base } = this.#requireOssContext("fetchSavedMapList");
-    const bytes = await fetcher.fetchBlob({ ...base, ...opts, filename: objName });
+    const bytes = await fetcher.fetchBlob({ ...base, ...opts, filename: parsed.filename });
     return decodeSavedMapList(bytes);
   }
 
@@ -960,23 +952,9 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
           if (this.#applyPointerCapture("path", c.value)) {
             dirty = true;
           }
-        } else if (
-          c.piid === CLOUD_OBJ_PROP.POINTER_JSON.piid &&
-          typeof c.value === "string" &&
-          c.value.length > 0
-        ) {
-          let parsed: { obj_name?: unknown; object_name?: unknown; md5?: unknown };
-          try {
-            parsed = JSON.parse(c.value) as typeof parsed;
-          } catch {
-            continue;
-          }
-          const objNameRaw = parsed.obj_name ?? parsed.object_name;
-          if (typeof objNameRaw !== "string" || objNameRaw.length === 0) {
-            continue;
-          }
-          const md5 = typeof parsed.md5 === "string" ? parsed.md5 : undefined;
-          if (this.#applyPointerCapture("pointerJson", objNameRaw, md5)) {
+        } else if (c.piid === CLOUD_OBJ_PROP.POINTER_JSON.piid) {
+          const parsed = parsePointerJson(c.value);
+          if (parsed && this.#applyPointerCapture("pointerJson", parsed.filename, parsed.md5)) {
             dirty = true;
           }
         }

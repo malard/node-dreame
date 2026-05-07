@@ -395,3 +395,152 @@ export interface MapDecodeOptions {
   /** AES-256-CBC IV — 16 ASCII bytes, model-specific. */
   iv?: string;
 }
+
+// ─── Wire-shape contract for the JSON tail ──────────────────────────
+//
+// `MapTail` and `RawSegInf` describe the device's JSON-tail wire
+// format. Subset of keys node-dreame consumes; the index signature
+// captures everything else as `unknown` so unknown fields don't fail
+// parse. Kept in `types.ts` (alongside `MapData`) because it's the
+// shared contract for `decoder.ts` and `merge.ts` — not a decoder
+// internal.
+
+/**
+ * Subset of the JSON tail keys that the decoder consumes. Keep the
+ * shape loose — Dreame adds keys without notice and we don't want to
+ * fail on unknown ones.
+ */
+export interface MapTail {
+  timestamp_ms?: number;
+  /** `[left, top]` — overrides header dimensions when present. */
+  origin?: [number, number];
+  /** Rotation in degrees. */
+  mra?: number;
+  /** Docked flag. */
+  oc?: boolean;
+  /** No-charger flag. */
+  nc?: boolean;
+  /** No-robot flag. */
+  nr?: boolean;
+  /** Cleaning path string — see `parsePathTr`. */
+  tr?: string;
+  /** Active segment ids: `[[id], [id], ...]`. */
+  sa?: number[][];
+  /** Per-segment metadata, keyed by stringified id. */
+  seg_inf?: Record<string, RawSegInf>;
+  /** AI-detected obstacles, each a positional list. */
+  ai_obstacle?: unknown[][];
+  /** Optional `fsm` flag — `1` means frame-map mode (path B decoder). */
+  fsm?: number;
+  /**
+   * Cleaned-area overlay as a base64-encoded recursive map blob. See
+   * `parseCleanedAreaOverlay` for the inner shape (header + zlib +
+   * inner JSON tail with `CleanArea`).
+   */
+  decmap?: string;
+  /**
+   * User-defined geometry block (classic) — virtual walls, no-go
+   * zones, no-mop zones, no-go "do not cross" rects, and explicit
+   * carpet add markers. All inner arrays carry mm in the world frame.
+   * See `parseVirtualWalls`.
+   *
+   * Wire format (Tasshack `dev` `map.py:4656-4669`):
+   *   `{ line:   [[x0,y0,x1,y1], ...],
+   *      rect:   [[x0,y0,x1,y1, angle?], ...],
+   *      mop:    [[x0,y0,x1,y1, angle?], ...],
+   *      cliff:  [[x0,y0,x1,y1], ...],            // observed empty on r2532a
+   *      nocpt:  [[x0,y0,x1,y1], ...],            // additional no-go rects
+   *      addcpt: [[x0,y0,x1,y1, segId, ...], …]   // carpet polygons w/ shape codes
+   *   }`
+   */
+  vw?: {
+    line?: number[][];
+    rect?: number[][];
+    mop?: number[][];
+    cliff?: number[][];
+    nocpt?: number[][];
+    addcpt?: unknown[];
+  };
+  /**
+   * X50 threshold block — only present when the user has configured
+   * thresholds in the app. See `parseVirtualWalls`.
+   *
+   * Wire format (Tasshack `dev` `map.py:4678-4691`):
+   *   `{ vwsl:    [[x0,y0,x1,y1], ...],
+   *      npthrsd: [[x0,y0,x1,y1], ...],
+   *      ramp:    [[…polygon…], ...],   // observed empty on r2532a
+   *      cliff:   [[x0,y0,x1,y1], ...]
+   *   }`
+   *
+   * `vwsl` semantics flip on the presence of `npthrsd` in the same
+   * block — see `parseVirtualWalls`.
+   */
+  vws?: {
+    vwsl?: number[][];
+    npthrsd?: number[][];
+    ramp?: unknown[];
+    cliff?: number[][];
+  };
+  /**
+   * Low-clearance "sneak under furniture" zones — live-snapshot
+   * variant. Polygon ROIs in mm world-frame. Each entry is
+   * `{ id, type, hide, roi: [x0,y0,x1,y1,…] }`. NOT the same shape
+   * as `vw.rect`. See `parseLowLyingAreas`.
+   */
+  sneak_areas?: { id?: number; type?: number; hide?: number; roi?: number[]; ms?: number }[];
+  /**
+   * Low-clearance zones — saved variant, same shape as `sneak_areas`
+   * plus an `area` (m²) field. Preferred over `sneak_areas` when both
+   * are present in the same tail; `sneak_areas` is the live-fly
+   * version, `sneak_areas_end` is the saved one.
+   */
+  sneak_areas_end?: { id?: number; type?: number; hide?: number; roi?: number[]; ms?: number; area?: number }[];
+  /**
+   * Per-room wall geometry, only on saved-map blobs. See
+   * `parseWallsInfo`.
+   */
+  walls_info?: {
+    version_flag?: number;
+    storeys?: {
+      rooms?: {
+        room_id?: number;
+        walls?: {
+          type?: number;
+          beg_pt_x?: number;
+          beg_pt_y?: number;
+          end_pt_x?: number;
+          end_pt_y?: number;
+          normal_x?: number;
+          normal_y?: number;
+        }[];
+      }[];
+    }[];
+  };
+  /**
+   * Embedded saved-map blob — the persistent floor plan, encoded as
+   * a URL-safe-base64 + zlib + same-binary-header-as-MAP_DATA envelope
+   * (i.e. itself a map frame). Verified live 2026-05-07 (r2532a fw
+   * 4.3.9_2199): on this firmware the live I-frame's top-level tail
+   * does NOT carry the `vw` user-geometry block — the geometry lives
+   * in this embedded saved map. `MapDecoder.decode` recurses into
+   * `rism` and merges the inner `vw` block onto the outer `MapData`
+   * so consumers see "all walls for this floor" regardless of where
+   * the device chose to put them on this firmware.
+   */
+  rism?: string;
+  [key: string]: unknown;
+}
+
+/** Per-segment metadata from the JSON tail's `seg_inf.<id>` records. */
+export interface RawSegInf {
+  /** Adjacent segment ids. */
+  nei_id?: number[];
+  /** Floor material code. */
+  material?: number;
+  /** Floor direction code. */
+  direction?: number;
+  /** Base64-encoded display name. */
+  name?: string;
+  type?: number;
+  [key: string]: unknown;
+}

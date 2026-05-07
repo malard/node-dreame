@@ -24,7 +24,8 @@ export {
   parseWallsInfo,
   parseCleanedAreaOverlay,
 } from "./decoder.js";
-export type { MapHeader, MapTail, RawSegInf, PixelClass } from "./decoder.js";
+export type { MapHeader, PixelClass } from "./decoder.js";
+export type { MapTail, RawSegInf } from "./types.js";
 
 export { requestIFrame, requestPFrame } from "./request.js";
 export type { RequestIFrameOptions, RequestPFrameOptions } from "./request.js";
@@ -33,6 +34,9 @@ export { mergePFrame, mergePFrameEnvelope, OutOfOrderFrameError } from "./merge.
 
 export { OssFetcher } from "./oss-fetch.js";
 export type { OssFetchInput, OssFetcherOpts } from "./oss-fetch.js";
+
+export { parsePointerJson } from "./pointer-json.js";
+export type { ParsedPointerJson } from "./pointer-json.js";
 
 export { MapManager, clientFrameRequester } from "./manager.js";
 export type {

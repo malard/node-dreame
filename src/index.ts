@@ -39,6 +39,8 @@ export type {
   RefreshResult,
   ActionResult,
   VerifyMqttResult,
+  OssPointer,
+  OssPointerStore,
 } from "./vacuum.js";
 export {
   MiotState,

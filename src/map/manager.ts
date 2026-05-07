@@ -43,13 +43,9 @@ import type { DreameLogger } from "../types.js";
 import { CLOUD_OBJ_PROP } from "../miot-spec.js";
 import { DreameDeviceOfflineError } from "../errors.js";
 import { TypedEmitter } from "../typed-emitter.js";
-import {
-  MapDecodeError,
-  MapDecoder,
-  parseMapHeader,
-  unwrapEnvelope,
-} from "./decoder.js";
+import { MapDecoder, parseMapHeader, unwrapEnvelope } from "./decoder.js";
 import { mergePFrame, OutOfOrderFrameError } from "./merge.js";
+import { parsePointerJson } from "./pointer-json.js";
 import type { MapData } from "./types.js";
 import type { OssFetchInput, OssFetcher } from "./oss-fetch.js";
 import {
@@ -338,26 +334,17 @@ export class MapManager extends TypedEmitter<MapManagerEvents> {
   }
 
   async #handlePointerJsonPush(value: unknown): Promise<void> {
-    let parsed: { object_name?: unknown; obj_name?: unknown };
-    if (typeof value === "string") {
-      try {
-        parsed = JSON.parse(value) as typeof parsed;
-      } catch (err) {
-        this.#emitError(new MapDecodeError(`POINTER_JSON: invalid JSON ${String(err)}`));
-        return;
-      }
-    } else if (value && typeof value === "object") {
-      parsed = value as typeof parsed;
-    } else {
+    const pointer = parsePointerJson(value);
+    if (!pointer) {
+      // Malformed payload — treat as a no-op rather than emitting an
+      // error. Old behaviour emitted a `MapDecodeError` only on the
+      // string-but-invalid-JSON branch and silently dropped the
+      // typeof-object-but-missing-objname branch, so silent-drop is
+      // already the dominant policy. Unifying here keeps both paths
+      // consistent.
       return;
     }
-    // Dreame native publishes `object_name`; older notes / Tasshack docs
-    // sometimes say `obj_name`. Accept either.
-    const objName = parsed.object_name ?? parsed.obj_name;
-    if (typeof objName !== "string" || objName.length === 0) {
-      return;
-    }
-    await this.#fetchAndIngestOssBlob(objName);
+    await this.#fetchAndIngestOssBlob(pointer.filename);
   }
 
   /**

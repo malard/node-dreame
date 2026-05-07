@@ -39,9 +39,8 @@ import {
   parseMapJsonTail,
   sliceTailText,
   unwrapEnvelope,
-  type MapTail,
 } from "./decoder.js";
-import type { MapDecodeOptions } from "./types.js";
+import type { MapDecodeOptions, MapTail } from "./types.js";
 
 export class OutOfOrderFrameError extends Error {
   readonly expectedFrameId: number;
@@ -237,28 +236,35 @@ function mergeTails(
   if (!("sa" in p) && "sa" in prev) {
     merged.sa = prev.sa;
   }
-  // User-defined geometry blocks are configuration, not live state —
-  // most P-frames don't re-send any of them. Fall back to prev when
-  // absent so the running state retains user-defined zones / walls /
-  // thresholds / sneak-zones across the chain.
-  for (const key of [
-    "vw",
-    "vws",
-    "sneak_areas",
-    "sneak_areas_end",
-    "walls_info",
-    "rism",
-  ] as const) {
+  // User-defined geometry + persistent overlay blocks are
+  // configuration, not live state — most P-frames don't re-send any
+  // of them. Fall back to prev when absent so the running state
+  // retains user-defined geometry / cleaned-area / saved-map across
+  // the chain. To wire a new persistent tail key (e.g. `vw.cliff`
+  // when we get a fixture), add it here and to `MapTail` in types.
+  for (const key of PERSISTENT_TAIL_KEYS) {
     if (!(key in p) && key in prev) {
       merged[key] = prev[key];
     }
   }
-  // decmap is the cleaning-progress snapshot — re-emitted only on full
-  // updates, not every P-frame. Fall back to prev when absent so the
-  // running state retains the cleaned-area overlay between snapshots.
-  if (!("decmap" in p) && "decmap" in prev) {
-    merged.decmap = prev.decmap;
-  }
   return merged;
 }
+
+/**
+ * Tail-JSON keys that represent persistent floor-plan / saved-map /
+ * cleaning-progress configuration — re-emitted by the device only on
+ * full snapshots, not every P-frame. `mergeTails` falls these back
+ * from prev when the P-frame's tail doesn't carry them, so the
+ * running merged state keeps the user's geometry between full
+ * snapshots.
+ */
+export const PERSISTENT_TAIL_KEYS = [
+  "vw",
+  "vws",
+  "sneak_areas",
+  "sneak_areas_end",
+  "walls_info",
+  "rism",
+  "decmap",
+] as const;
 
