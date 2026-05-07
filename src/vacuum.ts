@@ -39,11 +39,17 @@ import {
   type CleaningHistoryRecord,
 } from "./vacuum/task-complete.js";
 import { decodeSavedMapList } from "./vacuum/saved-maps.js";
+import {
+  OssPointerCache,
+  type OssPointer,
+  type OssPointerStore,
+} from "./vacuum/oss-pointer.js";
 
 export type { VacuumState } from "./vacuum/state.js";
 export type { CleaningHistoryRecord } from "./vacuum/task-complete.js";
 export { parseTaskCompleteEvent } from "./vacuum/task-complete.js";
 export { decodeSavedMapList } from "./vacuum/saved-maps.js";
+export type { OssPointer, OssPointerStore } from "./vacuum/oss-pointer.js";
 
 /**
  * High-level wrapper around a Dreame robot vacuum.
@@ -143,52 +149,6 @@ export type VerifyMqttResult =
   | { reason: "not-watching"; echoMs: null; echoCount: 0 };
 
 /**
- * One captured OSS object pointer the device has pushed at some point
- * during the lifetime of `Vacuum.rememberOssPointer()`. The signed
- * download URL is NOT cached here — it's resolved on demand via
- * `OssFetcher`, which manages its own short-lived URL cache. The
- * pointer here is the long-lived part: the OSS object name plus the
- * MQTT push that surfaced it. OSS object lifetimes on the Dreame
- * regional bucket are weeks-stable in practice — long enough that a
- * pointer captured during one session reliably resolves in the next.
- */
-export interface OssPointer {
-  /** Bare OSS object name (e.g. `ali_dreame/<uid>/<did>/<n>`). */
-  filename: string;
-  /**
-   * Which property surfaced this pointer:
-   *   - `"path"` — siid 6 piid 3 (`PATH` push). Live I-frame; on
-   *     r2532a the saved-map blob is embedded inside this frame's
-   *     `tail.rism`, so `MapDecoder.decode` recurses to surface the
-   *     full geometry.
-   *   - `"pointerJson"` — siid 6 piid 8 (`POINTER_JSON` push). The
-   *     saved-map list wrapper (the body that `decodeSavedMapList`
-   *     parses).
-   */
-  source: "path" | "pointerJson";
-  /** ISO-8601 timestamp of when the pointer was last captured / refreshed. */
-  seenAt: string;
-  /** md5 hint from the wire — only present on `source: "pointerJson"` pushes. */
-  md5?: string;
-}
-
-/**
- * Optional persistence callback for `Vacuum.rememberOssPointer()`.
- * The lib stays IO-free; consumers wire up the actual filesystem /
- * keyvalue store and pass `read` / `write` functions.
- *
- * - `read()` is called once when `rememberOssPointer()` is called, to
- *   restore any pointer captured in a previous session.
- * - `write(pointer)` is called every time a fresh pointer is captured
- *   on the wire (and only when the pointer's `filename` actually
- *   changed — same-filename re-pushes are deduped at the lib layer).
- */
-export interface OssPointerStore {
-  read(): OssPointer[] | null;
-  write(pointers: readonly OssPointer[]): void;
-}
-
-/**
  * Cumulative lifetime stats from the device's totals service (siid 12).
  * Returned by `Vacuum.fetchTotals()`.
  */
@@ -256,8 +216,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
   #mapManager: MapManager | null = null;
   #ossFetcher: OssFetcher | null = null;
   #capabilities: DeviceCapabilities | null = null;
-  #pointers: Map<"path" | "pointerJson", OssPointer> = new Map();
-  #pointerStore: OssPointerStore | null = null;
+  #pointerCache = new OssPointerCache();
   #pointerCaptureAttached = false;
 
   constructor(client: DreameClient, device: DreameDevice) {
@@ -930,13 +889,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       );
     }
     if (opts.pointerStore !== undefined) {
-      this.#pointerStore = opts.pointerStore;
-      const restored = opts.pointerStore.read();
-      if (restored) {
-        for (const p of restored) {
-          this.#pointers.set(p.source, p);
-        }
-      }
+      this.#pointerCache.attachStore(opts.pointerStore);
     }
     if (this.#pointerCaptureAttached) {
       return;
@@ -945,34 +898,24 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     this.#subscription.on("properties", (changes: PropertyChange[]) => {
       let dirty = false;
       for (const c of changes) {
-        if (c.siid !== CLOUD_OBJ_PROP.PATH.siid) {
-          continue;
-        }
-        if (c.piid === CLOUD_OBJ_PROP.PATH.piid && typeof c.value === "string" && c.value.length > 0) {
-          if (this.#applyPointerCapture("path", c.value)) {
-            dirty = true;
-          }
-        } else if (c.piid === CLOUD_OBJ_PROP.POINTER_JSON.piid) {
-          const parsed = parsePointerJson(c.value);
-          if (parsed && this.#applyPointerCapture("pointerJson", parsed.filename, parsed.md5)) {
-            dirty = true;
-          }
+        if (this.#pointerCache.ingest(c)) {
+          dirty = true;
         }
       }
-      if (dirty && this.#pointerStore) {
-        this.#pointerStore.write(this.lastOssPointers());
+      if (dirty) {
+        this.#pointerCache.flushToStore();
       }
     });
   }
 
   /** Latest captured pointer for one source, or `null` if never seen. */
   lastOssPointer(source: "path" | "pointerJson" = "path"): OssPointer | null {
-    return this.#pointers.get(source) ?? null;
+    return this.#pointerCache.get(source);
   }
 
   /** All captured pointers, latest-only per source. */
   lastOssPointers(): readonly OssPointer[] {
-    return [...this.#pointers.values()];
+    return this.#pointerCache.list();
   }
 
   /**
@@ -989,7 +932,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * 80001 case `fetchSavedMapList` swallows.
    */
   async fetchMapFromOss(opts: { filename?: string } = {}): Promise<MapData> {
-    const filename = opts.filename ?? this.#pointers.get("path")?.filename;
+    const filename = opts.filename ?? this.#pointerCache.get("path")?.filename;
     if (typeof filename !== "string" || filename.length === 0) {
       throw new DreameTransportError(
         "fetchMapFromOss: no PATH pointer cached — call rememberOssPointer() first or pass `filename`",
@@ -998,32 +941,6 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     const { fetcher, base } = this.#requireOssContext("fetchMapFromOss");
     const bytes = await fetcher.fetchBlob({ ...base, filename });
     return MapDecoder.decode(bytes.toString("utf8"));
-  }
-
-  /**
-   * Apply a pointer capture; returns true if the cache actually
-   * changed (filename or md5 differs from the prior entry for this
-   * source). Same-content re-pushes return false.
-   */
-  #applyPointerCapture(
-    source: "path" | "pointerJson",
-    filename: string,
-    md5?: string,
-  ): boolean {
-    const prev = this.#pointers.get(source);
-    if (prev && prev.filename === filename && prev.md5 === md5) {
-      return false;
-    }
-    const next: OssPointer = {
-      filename,
-      source,
-      seenAt: new Date().toISOString(),
-    };
-    if (md5 !== undefined) {
-      next.md5 = md5;
-    }
-    this.#pointers.set(source, next);
-    return true;
   }
 
   // ─── settings ──────────────────────────────────────────────────────

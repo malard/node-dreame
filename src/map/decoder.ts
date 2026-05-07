@@ -36,9 +36,9 @@ import { collectSegments, decodePixelGridFsm1 } from "./pixel-grid.js";
 import { parsePathTr } from "./path.js";
 import { parseObstacles } from "./obstacles.js";
 import {
-  parseLowLyingAreas,
-  parseVirtualWalls,
-  parseWallsInfo,
+  coalesceGeometry,
+  isGeometryComplete,
+  parseTailGeometry,
 } from "./geometry.js";
 import { parseCleanedAreaOverlay } from "./cleaned-area.js";
 import { mergePFrame, mergePFrameEnvelope } from "./merge.js";
@@ -75,12 +75,10 @@ export class MapDecoder {
     const segments = canDecodePixels ? collectSegments(layers, dimensions, tail) : [];
     const paths = parsePathTr(tail.tr ?? "");
     const obstacles = parseObstacles(tail.ai_obstacle ?? []);
-    let { virtualWalls, restrictedAreas } = parseVirtualWalls(tail.vw, tail.vws);
-    let lowLyingAreas = parseLowLyingAreas(tail.sneak_areas_end, tail.sneak_areas);
-    let wallsInfo = parseWallsInfo(tail.walls_info);
+    let geometry = parseTailGeometry(tail);
     // The persistent saved-map blob is embedded inline as `tail.rism`
     // (URL-safe-base64 + zlib + same envelope shape). On r2532a fw
-    // 4.3.9_2199 the outer tail's `vw`/`vws` are absent and the
+    // 4.3.9_2199 the outer tail's geometry blocks are absent and the
     // geometry lives only in the inner saved-map's tail. Recurse to
     // surface it; if the inner blob fails to decode (corrupt,
     // unexpected shape, missing AES IV, etc.) leave the outer values
@@ -89,31 +87,14 @@ export class MapDecoder {
     // Recurses one level only — the inner saved-map blob does not
     // carry its own `rism`.
     if (
-      (virtualWalls.length === 0 ||
-        restrictedAreas.length === 0 ||
-        lowLyingAreas.length === 0 ||
-        wallsInfo === null) &&
+      !isGeometryComplete(geometry) &&
       typeof tail.rism === "string" &&
       tail.rism.length > 0
     ) {
       try {
         const innerInflated = unwrapEnvelope(tail.rism);
         const { tail: innerTail } = parseFrame(innerInflated);
-        const inner = parseVirtualWalls(innerTail.vw, innerTail.vws);
-        const innerLow = parseLowLyingAreas(innerTail.sneak_areas_end, innerTail.sneak_areas);
-        const innerWallsInfo = parseWallsInfo(innerTail.walls_info);
-        if (virtualWalls.length === 0 && inner.virtualWalls.length > 0) {
-          virtualWalls = inner.virtualWalls;
-        }
-        if (restrictedAreas.length === 0 && inner.restrictedAreas.length > 0) {
-          restrictedAreas = inner.restrictedAreas;
-        }
-        if (lowLyingAreas.length === 0 && innerLow.length > 0) {
-          lowLyingAreas = innerLow;
-        }
-        if (wallsInfo === null && innerWallsInfo !== null) {
-          wallsInfo = innerWallsInfo;
-        }
+        geometry = coalesceGeometry(geometry, parseTailGeometry(innerTail));
       } catch {
         // intentional — outer frame remains valid even if rism is unreadable
       }
@@ -135,10 +116,7 @@ export class MapDecoder {
       segments,
       paths,
       obstacles,
-      virtualWalls,
-      restrictedAreas,
-      lowLyingAreas,
-      wallsInfo,
+      ...geometry,
       cleanedArea,
     };
   }

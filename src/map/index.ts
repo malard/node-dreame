@@ -25,7 +25,11 @@ export {
   parseVirtualWalls,
   parseLowLyingAreas,
   parseWallsInfo,
+  parseTailGeometry,
+  coalesceGeometry,
+  isGeometryComplete,
 } from "./geometry.js";
+export type { MapGeometry } from "./geometry.js";
 export { parseCleanedAreaOverlay } from "./cleaned-area.js";
 
 export type { MapTail, RawSegInf } from "./types.js";

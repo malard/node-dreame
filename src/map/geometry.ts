@@ -266,6 +266,73 @@ interface SneakAreaEntry {
 }
 
 /**
+ * Aggregate of every geometry-bearing field surfaced from the tail.
+ * `MapDecoder.decode` parses one of these per tail and the rism-
+ * recurse path uses `coalesceGeometry` to fill in fields the outer
+ * tail left empty.
+ */
+export interface MapGeometry {
+  virtualWalls: MapVirtualWall[];
+  restrictedAreas: MapRestrictedArea[];
+  lowLyingAreas: MapLowLyingArea[];
+  wallsInfo: MapWallsInfo | null;
+}
+
+/**
+ * Decode every geometry-bearing field from a tail in one shot.
+ *
+ * Adding a new geometry block (e.g. `vw.cliff` once we get a fixture)
+ * is a one-line edit here — `MapDecoder.decode` and the rism-recurse
+ * path automatically pick up the new field via `coalesceGeometry`.
+ */
+export function parseTailGeometry(tail: MapTail): MapGeometry {
+  const { virtualWalls, restrictedAreas } = parseVirtualWalls(tail.vw, tail.vws);
+  return {
+    virtualWalls,
+    restrictedAreas,
+    lowLyingAreas: parseLowLyingAreas(tail.sneak_areas_end, tail.sneak_areas),
+    wallsInfo: parseWallsInfo(tail.walls_info),
+  };
+}
+
+/**
+ * `true` when every geometry field has at least one entry. Used by
+ * the rism-recurse path to skip the inner decode when the outer tail
+ * already supplied everything.
+ */
+export function isGeometryComplete(g: MapGeometry): boolean {
+  return (
+    g.virtualWalls.length > 0 &&
+    g.restrictedAreas.length > 0 &&
+    g.lowLyingAreas.length > 0 &&
+    g.wallsInfo !== null
+  );
+}
+
+/**
+ * Merge two `MapGeometry` snapshots. `primary` wins on every field
+ * that's non-empty there; `fallback` fills the rest. Used by the
+ * rism-recurse path: outer tail's geometry as primary, inner saved-
+ * map blob's geometry as fallback.
+ */
+export function coalesceGeometry(
+  primary: MapGeometry,
+  fallback: MapGeometry,
+): MapGeometry {
+  return {
+    virtualWalls:
+      primary.virtualWalls.length > 0 ? primary.virtualWalls : fallback.virtualWalls,
+    restrictedAreas:
+      primary.restrictedAreas.length > 0
+        ? primary.restrictedAreas
+        : fallback.restrictedAreas,
+    lowLyingAreas:
+      primary.lowLyingAreas.length > 0 ? primary.lowLyingAreas : fallback.lowLyingAreas,
+    wallsInfo: primary.wallsInfo !== null ? primary.wallsInfo : fallback.wallsInfo,
+  };
+}
+
+/**
  * Parse low-clearance "sneak under furniture" zones from a tail's
  * `sneak_areas` / `sneak_areas_end` arrays. Verified live 2026-05-07
  * on r2532a fw 4.3.9_2199 (every observed entry was a 4-corner rect,
