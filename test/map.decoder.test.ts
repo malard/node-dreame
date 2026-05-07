@@ -461,7 +461,7 @@ describe("parseVirtualWalls", () => {
 
 // ─── parseLowLyingAreas (A5) ────────────────────────────────────────
 
-import { parseLowLyingAreas } from "../src/map/decoder.js";
+import { parseLowLyingAreas } from "../src/map/geometry.js";
 
 describe("parseLowLyingAreas", () => {
   it("returns empty when neither field is present", () => {
@@ -523,7 +523,7 @@ describe("parseLowLyingAreas", () => {
 
 // ─── parseWallsInfo (A6) ────────────────────────────────────────────
 
-import { parseWallsInfo } from "../src/map/decoder.js";
+import { parseWallsInfo } from "../src/map/geometry.js";
 
 describe("parseWallsInfo", () => {
   it("returns null for absent / empty input", () => {

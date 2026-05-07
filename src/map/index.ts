@@ -1,30 +1,33 @@
 /**
  * Sub-export entry-point: `node-dreame/map`.
  *
- * Phase 1 ships the pure decoder. `MapManager` (Phases 3-4) and the
- * `package.json` `exports` field wiring (Phase 5) come later.
+ * Per-concern modules are split for clarity (see each file's
+ * docblock); this barrel re-exports the public surface so
+ * consumers don't need to reach into specific filenames.
  */
 
+export { MapDecoder } from "./decoder.js";
 export {
-  MapDecoder,
   MapDecodeError,
   HEADER_SIZE,
   ANGLE_ABSENT,
   FRAME_TYPE,
   unwrapEnvelope,
-  parseMapHeader,
-  parseMapJsonTail,
-  sliceTailText,
-  classifyPixelFsm1,
-  decodePixelGridFsm1,
-  parsePathTr,
-  parseObstacles,
+} from "./envelope.js";
+export { parseMapHeader } from "./header.js";
+export type { MapHeader } from "./header.js";
+export { parseMapJsonTail, parseFrame, sliceTailText } from "./tail.js";
+export { classifyPixelFsm1, decodePixelGridFsm1 } from "./pixel-grid.js";
+export type { PixelClass } from "./pixel-grid.js";
+export { parsePathTr } from "./path.js";
+export { parseObstacles } from "./obstacles.js";
+export {
   parseVirtualWalls,
   parseLowLyingAreas,
   parseWallsInfo,
-  parseCleanedAreaOverlay,
-} from "./decoder.js";
-export type { MapHeader, PixelClass } from "./decoder.js";
+} from "./geometry.js";
+export { parseCleanedAreaOverlay } from "./cleaned-area.js";
+
 export type { MapTail, RawSegInf } from "./types.js";
 
 export { requestIFrame, requestPFrame } from "./request.js";

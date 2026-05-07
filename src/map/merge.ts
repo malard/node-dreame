@@ -31,15 +31,9 @@
  * this to queue or trigger a re-request.
  */
 
-import {
-  FRAME_TYPE,
-  HEADER_SIZE,
-  MapDecodeError,
-  parseMapHeader,
-  parseMapJsonTail,
-  sliceTailText,
-  unwrapEnvelope,
-} from "./decoder.js";
+import { FRAME_TYPE, HEADER_SIZE, MapDecodeError, unwrapEnvelope } from "./envelope.js";
+import { parseMapHeader } from "./header.js";
+import { parseMapJsonTail, sliceTailText } from "./tail.js";
 import type { MapDecodeOptions, MapTail } from "./types.js";
 
 export class OutOfOrderFrameError extends Error {
