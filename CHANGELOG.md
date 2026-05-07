@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-07
+
 Live map decoding closes its biggest consumer-visible gap: the
 `vw` / `vws` / `walls_info` / `sneak_areas` blocks the device emits
 on every saved-map blob now surface on `MapData`, and the recursive
