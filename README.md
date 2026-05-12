@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/malard/node-dreame/actions/workflows/ci.yml/badge.svg)](https://github.com/malard/node-dreame/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](./package.json)
+[![Node](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](./package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6.svg?logo=typescript&logoColor=white)](./tsconfig.json)
 [![Tested model](https://img.shields.io/badge/tested-Dreame%20X50%20Ultra%20Complete%20%28r2532a%29-orange.svg)](./docs/spec-discovery-methodology.md)
 [![Issues](https://img.shields.io/github/issues/malard/node-dreame.svg)](https://github.com/malard/node-dreame/issues)
@@ -10,7 +10,7 @@
 
 Node.js client for the **Dreame native cloud** — the backend behind the **Dreamehome** mobile app. Control Dreame robot vacuums from Node, without going via Home Assistant or Xiaomi Mi cloud.
 
-> **Status:** pre-alpha. Auth flow is being reverse-engineered. Public API will change. Do not use in production yet.
+> **Status:** pre-1.0. Auth, MQTT live updates, action dispatch, and live-map decoding are all working against a real Dreame X50 Ultra Complete. Public API may still shift before 1.0 — pin a specific version.
 
 ## Why this exists
 
@@ -20,8 +20,8 @@ This library targets that gap.
 
 ## Scope
 
-- **In scope:** Dreamehome cloud auth (email/password), device discovery, status polling, command dispatch, MQTT live updates, room-aware cleaning.
-- **Out of scope (for now):** Mi cloud, the binary map renderer, Home Assistant integration.
+- **In scope:** Dreamehome cloud auth (email/password), device discovery, status polling, command dispatch, MQTT live updates, room-aware cleaning, live-map and saved-map decoding (`MapData` shape — segments, walls, no-go zones, dock + robot pose, paths).
+- **Out of scope (for now):** Mi cloud (use [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum) for that), pixel/raster rendering of maps (we expose structured `MapData`; the consumer does the viewport transform — see [`docs/live-map-format.md`](./docs/live-map-format.md)), Home Assistant integration.
 
 ## Install
 
@@ -29,7 +29,7 @@ This library targets that gap.
 npm install node-dreame
 ```
 
-Requires Node.js 18 or newer.
+Requires Node.js 24 or newer.
 
 ## Usage
 
@@ -74,6 +74,18 @@ await vacuum.watch();
 vacuum.on("change", (state) => console.log(state));
 vacuum.on("taskComplete", (record) => console.log("done:", record));
 ```
+
+For notification-style consumers there's also a single envelope event covering start / complete / abort with a typed reason:
+
+```ts
+vacuum.on("taskLifecycle", (ev) => {
+  if (ev.phase === "started")   console.log("cleaning started");
+  if (ev.phase === "completed") console.log("done:", ev.record);
+  if (ev.phase === "aborted")   console.log(`robot needs attention: ${ev.reason}`);
+});
+```
+
+`reason` is derived from `MiotError` — known refusal codes surface as `clean-water-tank-empty`, `wastewater-tank-full`, `robot-lifted`, etc.; unknown codes fall through as `error-<n>`.
 
 The MQTT channel is **passive** — the device only pushes when state changes, so a quiet idle window can look indistinguishable from a broken subscription. Use the first-class verifier to remove the ambiguity:
 
@@ -183,7 +195,7 @@ Roughly:
 
 - **Well-mapped:** auth + transport, MQTT event channels, dock settings, OTA flow, the global Custom-mode schedule format, basic battery/charge/state.
 - **Partly mapped:** MIoT state enum (we have all the keyDefine translations, but only a subset have been observed in real transitions); FEATURE_CONFIG_JSON keys (3 of ~36 confirmed by toggle, the rest documented by name only).
-- **Hardly touched:** actual cleaning runs, room-targeted cleaning behaviour, per-room schedule packing, the `0xC249` middle bits of the global Custom-mode int, voice configuration, DND scheduling, error-code catalogue, AI object-detection class IDs, the siid 6 / siid 99 binary blobs (likely live map + telemetry), and the many siid 4 piids we never observed move.
+- **Hardly touched:** room-targeted cleaning behaviour, per-room schedule packing, the `0xC249` middle bits of the global Custom-mode int, voice configuration, DND scheduling, AI object-detection class IDs, the `siid 99 piid 98` telemetry blob, and the many siid 4 piids we never observed move. (Live-map blobs on `siid 6` and the cleaning-run lifecycle are now mapped — see the live-map decoder and `taskLifecycle`.)
 
 Each entry in `src/miot-spec.ts` is annotated:
 
@@ -198,7 +210,7 @@ If a behaviour you care about isn't VERIFIED, treat it as a guess. If you exerci
 - Typed event channels: `properties_changed`, `props` (incl. OTA), `_otc.info`
 - Property reads (state, error, battery, charging, suction, water, cleaning_mode raw, task_status raw, volume, consumables, firmware build, serial, timezone, off-peak charging window, DND windows, feature toggles JSON, version metadata)
 - Property writes (round-trip verified)
-- Actions: `LOCATE`, `TEST_SOUND`, `CLEAR_WARNING` only
+- Actions: `LOCATE`, `TEST_SOUND`, `CLEAR_WARNING`, `START` (cleans, refused with `MiotError.CleanWaterTankEmpty=107` / `WastewaterTankFull=105` when tanks are blocked), `STOP`, `PAUSE`
 - Full OTA cycle (download → install → reboot → re-online → version flip)
 - All dock settings reachable from the Dreamehome app's "Base Station" menu (mop wash temp/water level/wetness, drying mode, hair compression, smart-mode master, mast control, auto-empty frequency)
 - All cleaning behaviour settings reachable from the app's "Cleaning Settings" menu (carpet handling mode + sub-options, child lock, resume cleaning, power-saving, obstacle crossing mode, AI obstacle bitfield partial)
@@ -209,17 +221,17 @@ If a behaviour you care about isn't VERIFIED, treat it as a guess. If you exerci
 
 ### Known specifically-NOT-verified pieces
 
-- Actions `START`, `PAUSE`, `STOP`, `CHARGE`/dock, `START_AUTO_EMPTY`, `START_WASHING`, all `RESET_*` — wired with Tasshack's older-model siid:aiid values, but no live test
+- Actions `CHARGE`/dock, `START_AUTO_EMPTY`, `START_WASHING`, all `RESET_*` — wired with Tasshack's older-model siid:aiid values, but no live test
 - `SuctionLevel`, `WaterVolume`, `ChargingStatus`, `CleaningMode` enum behaviour during actual cleaning (settings reads work; downstream effects untested)
-- `TASK_STATUS` (siid 4 piid 1) — raw int only; values 3, 6, 13, 14, 17, 23 observed in different states without a clean mapping
+- `TASK_STATUS` (siid 4 piid 1) — raw int only; values 1, 2, 3, 6, 12, 13, 14, 17, 18, 23 observed in different states without a clean mapping
 - `CleaningMode` (siid 4 piid 23) — known to be a packed bitfield on r2532a (raw 5120 in baseline); not decoded
 - Per-room schedule packed-int format ([issue #1](https://github.com/malard/node-dreame/issues/1))
 - AI obstacle bitfield (`siid 4 piid 22`) — partial decoding only; bits 1, 2, 4 verified, bits 0, 3, 5-8 unknown
 - `0xC249` middle bits of the Custom-mode global schedule int
-- The `siid 99 piid 98` and `siid 6 piid 1` compressed blobs (likely telemetry + live map)
+- The `siid 99 piid 98` compressed telemetry blob — payload format unknown
 - AI object-detection class catalog (we see bbox class id 160 repeatedly; other class IDs not observed)
 - Most of the `FEATURE_CONFIG_KEYS` (~25 still documented by name only)
-- A real cleaning run — none triggered via the lib
+- Long-form cleaning-run behaviour through to completion — we've triggered short START/STOP cycles via the lib, but a full task end-to-end (with the resulting `taskComplete` event) has only been observed from app-initiated runs
 
 ### Cloud-only settings (no MQTT push to the device)
 
