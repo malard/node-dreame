@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- New `taskLifecycle` event on `Vacuum` — a single typed envelope
+  covering the three transitions a notification consumer typically
+  wires up: `started` (TASK_STATUS reaches the active-running state
+  from a known non-running value), `completed` (carrying the same
+  parsed `CleaningHistoryRecord` as the existing `taskComplete`
+  event), and `aborted` (errorCode flips 0 → non-zero, excluding the
+  benign end-of-task code 68). `aborted` payloads include a
+  kebab-case `reason` derived from the `MiotError` catalogue
+  (`clean-water-tank-empty`, `wastewater-tank-full`,
+  `robot-lifted`, etc.) and fall back to `error-<n>` for codes that
+  haven't been catalogued yet. Initial null → known transitions are
+  suppressed so subscribing to a device that's already mid-task
+  doesn't fire a phantom `started`. Closes the consumer-facing gap
+  for dunbar-os-style "robot needs you" push notifications.
+- `MiotError.CleanWaterTankEmpty = 107` and
+  `MiotError.WastewaterTankFull = 105`. Verified live on r2532a
+  2026-05-12 by firing `vacuum.start()` with each tank in the
+  refusal state — error latched on the attempt, cleared on the
+  physical condition resolving or on `vacuum.stop()`. Reuse via
+  `vacuum.state.errorCode === MiotError.CleanWaterTankEmpty` or via
+  `taskLifecycle`'s typed `reason`.
+
 ## [0.2.0] - 2026-05-07
 
 Live map decoding closes its biggest consumer-visible gap: the

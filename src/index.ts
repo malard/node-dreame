@@ -38,6 +38,7 @@ export type {
   CleaningHistoryRecord,
   RefreshResult,
   ActionResult,
+  TaskLifecycle,
   VerifyMqttResult,
   OssPointer,
   OssPointerStore,

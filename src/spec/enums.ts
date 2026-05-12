@@ -122,15 +122,22 @@ export enum ChargingStatus {
  *          the drying period.
  * - `74` — manual mop install required. Fires after auto-install attempts
  *          fail; auto-clears once the user manually installs the pads.
+ * - `105` — wastewater (dirty-water) tank full. Refuses `start()` until the
+ *           tank is emptied. VERIFIED 2026-05-12 by firing `start()` with the
+ *           dirty-water tank physically full; error latched until cleared by
+ *           emptying the tank (or by `stop()`).
+ * - `107` — clean-water tank empty. Refuses `start()` until the tank is
+ *           refilled. VERIFIED 2026-05-12 the same way — fired on `start()`
+ *           with the clean-water reservoir empty, cleared on refill.
  * - `114` — washboard filter needs cleaning (maintenance reminder).
  *
  * Most codes auto-clear when the underlying condition resolves — the
  * `CLEAR_WARNING` action is rarely needed. The string mirror at
  * `VACUUM_PROP.ERROR_STR_MIRROR` (siid 4 piid 18) co-fires within ~1ms.
  *
- * Other Tasshack-documented error codes (e.g. low battery, dustbin full,
- * water tank empty) likely use different ints on r2532a — treat any
- * non-listed value as raw and capture for cataloguing.
+ * Other Tasshack-documented error codes (e.g. low battery, dustbin full)
+ * likely use different ints on r2532a — treat any non-listed value as raw
+ * and capture for cataloguing.
  */
 export enum MiotError {
   Clear = 0,
@@ -138,6 +145,8 @@ export enum MiotError {
   RobotLifted = 18,
   TaskComplete = 68,
   ManualMopInstallRequired = 74,
+  WastewaterTankFull = 105,
+  CleanWaterTankEmpty = 107,
   WashboardFilterNeedsCleaning = 114,
 }
 

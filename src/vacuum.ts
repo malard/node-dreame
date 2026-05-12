@@ -26,6 +26,7 @@ import {
   CLOUD_OBJ_PROP,
   CONSUMABLE_PROP,
   CleaningMode,
+  MiotError,
   SETTINGS_PROP,
   SuctionLevel,
   TOTALS_PROP,
@@ -189,6 +190,45 @@ export interface CleanOpts {
 }
 
 /**
+ * Cleaning-job lifecycle envelope. One event for everything a
+ * notification-style consumer typically cares about: did a job just
+ * start, did it finish, or did it get refused / aborted (with reason).
+ *
+ * Detection rules:
+ *
+ * - `started` — `TASK_STATUS` (siid 4 piid 1) transitions to `2`
+ *   (active task running) from any other value.
+ * - `completed` — fires alongside `taskComplete`, carrying the same
+ *   parsed `CleaningHistoryRecord`. Driven by the
+ *   `event_occured siid 4 eiid 1` push.
+ * - `aborted` — `errorCode` (siid 2 piid 2) transitions from `0`/null
+ *   to a non-zero value that is NOT the benign end-of-task code
+ *   `MiotError.TaskComplete` (68). Covers both "refused to start"
+ *   (e.g. empty clean-water tank → code 107) and mid-task failure
+ *   (e.g. robot lifted → code 18).
+ *
+ * `reason` is a kebab-case label derived from `MiotError` when the
+ * code is known, or `"error-<n>"` for raw codes pending cataloguing.
+ */
+export type TaskLifecycle =
+  | { phase: "started"; at: Date }
+  | { phase: "completed"; at: Date; record: CleaningHistoryRecord }
+  | { phase: "aborted"; at: Date; errorCode: number; reason: string };
+
+const ABORT_REASONS: Record<number, string> = {
+  [MiotError.WheelRotationAnomaly]: "wheel-rotation-anomaly",
+  [MiotError.RobotLifted]: "robot-lifted",
+  [MiotError.ManualMopInstallRequired]: "manual-mop-install-required",
+  [MiotError.WastewaterTankFull]: "wastewater-tank-full",
+  [MiotError.CleanWaterTankEmpty]: "clean-water-tank-empty",
+  [MiotError.WashboardFilterNeedsCleaning]: "washboard-filter-needs-cleaning",
+};
+
+function abortReason(code: number): string {
+  return ABORT_REASONS[code] ?? `error-${code}`;
+}
+
+/**
  * Event payload map for `Vacuum`. Keys are the strings the class emits
  * via `this.emit(...)`; payloads must match the listener signature.
  *
@@ -196,6 +236,8 @@ export interface CleanOpts {
  *   (after refresh / property push / OTA snapshot update / online flip).
  * - `taskComplete`: fires once per `event_occured siid 4 eiid 1` push
  *   carrying the parsed per-task summary record.
+ * - `taskLifecycle`: higher-level start / complete / abort envelope —
+ *   subscribe once instead of state-watching. See `TaskLifecycle`.
  * - `ota`: convenience mirror of the underlying subscription's `ota`
  *   event after merge into the cached snapshot.
  * - `error`: forwarded from the underlying `DreameSubscription`.
@@ -203,6 +245,7 @@ export interface CleanOpts {
 export type VacuumEvents = {
   change: [VacuumState];
   taskComplete: [CleaningHistoryRecord];
+  taskLifecycle: [TaskLifecycle];
   ota: [OtaEvent];
   mapInfo: [MapInfoPush];
   error: [Error];
@@ -342,8 +385,11 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     this.#setOnline(true);
 
     this.#subscription.on("properties", (changes: PropertyChange[]) => {
+      const prev = this.#state;
       if (this.#applyBatch(changes)) {
-        this.emit("change", this.state);
+        const next = this.#state;
+        this.#emitLifecycleTransitions(prev, next);
+        this.emit("change", next);
       }
     });
     this.#subscription.on("ota", (event: OtaEvent) => {
@@ -365,6 +411,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
         const record = parseTaskCompleteEvent(ev);
         if (record) {
           this.emit("taskComplete", record);
+          this.emit("taskLifecycle", { phase: "completed", at: new Date(), record });
         }
       }
     });
@@ -1135,6 +1182,38 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * carry several entries, and high-frequency channels (mop rotation
    * pulse, washboard countdown) fire many times per second.
    */
+  #emitLifecycleTransitions(prev: VacuumState, next: VacuumState): void {
+    // `started`: TASK_STATUS transitions to 2 (active task running) from a
+    // known non-2 value. Requires prev to be non-null so the first state
+    // seed doesn't fire a phantom "started" when the device happens to
+    // already be cleaning at subscription time.
+    if (
+      prev.taskStatusRaw !== null &&
+      prev.taskStatusRaw !== 2 &&
+      next.taskStatusRaw === 2
+    ) {
+      this.emit("taskLifecycle", { phase: "started", at: new Date() });
+    }
+
+    // `aborted`: errorCode transitions 0 → non-zero, excluding the benign
+    // end-of-task code (`MiotError.TaskComplete` = 68) which co-fires with
+    // normal completion. Initial null → non-zero is suppressed for the same
+    // reason as above.
+    if (
+      prev.errorCode === MiotError.Clear &&
+      next.errorCode !== null &&
+      next.errorCode !== MiotError.Clear &&
+      next.errorCode !== MiotError.TaskComplete
+    ) {
+      this.emit("taskLifecycle", {
+        phase: "aborted",
+        at: new Date(),
+        errorCode: next.errorCode,
+        reason: abortReason(next.errorCode),
+      });
+    }
+  }
+
   #applyBatch(
     changes: ReadonlyArray<{ siid: number; piid: number; value?: unknown }>,
   ): boolean {
