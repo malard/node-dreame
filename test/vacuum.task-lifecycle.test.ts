@@ -14,10 +14,13 @@
 
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { Vacuum, type TaskLifecycle } from "../src/vacuum.js";
-import { MiotError } from "../src/spec/enums.js";
-import type { DreameClient } from "../src/client.js";
-import type { DreameDevice } from "../src/types.js";
+import {
+  MiotError,
+  Vacuum,
+  type DreameClient,
+  type DreameDevice,
+  type TaskLifecycle,
+} from "../src/index.js";
 
 const DEVICE: DreameDevice = {
   did: "DID-1",

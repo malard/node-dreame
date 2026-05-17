@@ -10,8 +10,12 @@
 
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { Vacuum, type BatteryLifecycle, type TaskLifecycle } from "../src/vacuum.js";
-import { MiotError } from "../src/spec/enums.js";
+import {
+  MiotError,
+  Vacuum,
+  type BatteryLifecycle,
+  type TaskLifecycle,
+} from "../src/index.js";
 import type { DreameClient } from "../src/client.js";
 import type { DreameDevice } from "../src/types.js";
 
