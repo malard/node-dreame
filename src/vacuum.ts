@@ -1498,7 +1498,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     // Only meaningful when battery is known AND device isn't actively
     // charging (a robot in the dock dropping through the thresholds
     // would be a battery telemetry glitch, not a real situation).
-    this.#emitBatteryTransitions(prev, next);
+    this.#emitBatteryTransitions(next);
   }
 
   /**
@@ -1511,8 +1511,11 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * charging state — that's an unambiguous "ran out" signal. The
    * `low`/`critical` events suppress while charging to avoid flapping
    * during a return-to-dock cycle that happens to land at low battery.
+   *
+   * Only `next` is needed: arming state lives on `this.#battery*Armed`,
+   * so the previous snapshot isn't required to decide whether to fire.
    */
-  #emitBatteryTransitions(prev: VacuumState, next: VacuumState): void {
+  #emitBatteryTransitions(next: VacuumState): void {
     const battery = next.battery;
     if (battery === null) {
       return;
@@ -1565,8 +1568,6 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       // actually armed; avoids a phantom at first reading post-watch.
       this.emit("batteryLifecycle", { phase: "recovered", at: new Date(), battery });
     }
-
-    void prev;
   }
 
   #applyBatch(
