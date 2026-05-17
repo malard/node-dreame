@@ -22,10 +22,13 @@ export const VACUUM_PROP = {
    */
   STATE: { siid: 2, piid: 1 } as const,
   /**
-   * Error/fault code. See `MiotError` enum for the 8 catalogued values
-   * verified on r2532a: 0/1/18/68/74/105/107/114. Most codes auto-clear when
-   * the underlying cause is resolved (no CLEAR_WARNING needed). The
-   * string-typed mirror at `ERROR_STR_MIRROR` (piid 18) co-fires within ~1ms.
+   * Error/fault code. See `MiotError` enum for the 9 catalogued values
+   * verified on r2532a: 0/1/18/68/74/105/107/114/120. Most codes auto-clear
+   * when the underlying cause is resolved (no CLEAR_WARNING needed). The
+   * string-typed mirror at `ERROR_STR_MIRROR` (piid 18) co-fires within ~1ms
+   * for *most* codes — `MopPadsMissing = 120` (the action-refusal "Mop not
+   * in place" code) was observed pushing only on this property, with
+   * FAULTS_STR staying empty for the latched duration.
    *
    * `TaskComplete = 68` is the benign end-of-task signal — filter it out of
    * any "needs attention" UX. `WastewaterTankFull = 105` and

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `MiotError.MopPadsMissing = 120` — the action-refusal "Mop not in
+  place" code fired when `start()` is called with mop pads not seated
+  on the robot. Distinct from `ManualMopInstallRequired = 74` (the
+  end-of-task auto-install-failed code). `taskLifecycle.aborted`
+  payloads surface this as `reason: "mop-pads-missing"`.
+- `state.lastStateUpdateAt: Date | null` — wall-clock timestamp of the
+  most-recent property batch that moved a field. Lets consumers detect
+  staleness without inferring it from `null` fields. Stamped by MQTT
+  property pushes, `refresh()`, `refreshFromCloud()`, OTA events, map-
+  info pushes, and online-flag flips.
+
+### Changed
+
+- `state.faults` now always includes a non-zero `errorCode` even when
+  `FAULTS_STR` (siid 4 piid 18) is silent. Fixes the case where
+  action-refusal codes (e.g. `MopPadsMissing = 120`) pushed only on
+  `ERROR` and left `state.faults` empty for the full latched window.
+- JSDoc on `VACUUM_PROP.ERROR` un-staled: now lists the 9 verified
+  codes (0/1/18/68/74/105/107/114/120) instead of the old 6, and flags
+  `TaskComplete = 68` as the benign end-of-task code to filter out of
+  any "needs attention" UX.
+
 ## [0.4.0] - 2026-05-17
 
 ### Added

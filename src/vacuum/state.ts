@@ -46,11 +46,13 @@ export interface VacuumState {
    */
   errorCode: number | null;
   /**
-   * Full list of currently-latched fault codes, parsed from
-   * `FAULTS_STR` (siid 4 piid 18). Empty when no faults. Typically
-   * one element (matching `errorCode`); multiple elements when
-   * several conditions are latched at once (e.g. robot lifted AND
-   * clean-water tank empty: `[18, 107]`).
+   * Full list of currently-latched fault codes. Primary source is the
+   * multi-value `FAULTS_STR` (siid 4 piid 18); a non-zero `errorCode`
+   * is always unioned in too so action-refusal codes that push only on
+   * `ERROR` (e.g. `MopPadsMissing = 120`) don't get lost. Empty when no
+   * faults. Typically one element (matching `errorCode`); multiple
+   * elements when several conditions are latched at once (e.g. robot
+   * lifted AND clean-water tank empty: `[18, 107]`).
    *
    * Codes are returned as raw ints; cross-reference `MiotError` for
    * the catalogued labels. Unknown codes pass through verbatim.
@@ -168,6 +170,18 @@ export interface VacuumState {
    * the first `mapInfo` push lands. See `MapInfoPush.savedMapIds`.
    */
   savedMapIds: readonly number[];
+  /**
+   * Wall-clock timestamp of the most-recent property batch that actually
+   * moved a field. `null` until the first such batch lands. Lets
+   * consumers detect "data is stale" without inferring from `null`
+   * fields — e.g. show "data N seconds old" when the dashboard's
+   * auto-refresh notices `Date.now() - lastStateUpdateAt > threshold`.
+   *
+   * Set by both MQTT property pushes and HTTP `refresh()` /
+   * `refreshFromCloud()` calls. Not bumped on no-op batches (where
+   * every field is already at the pushed value).
+   */
+  lastStateUpdateAt: Date | null;
 }
 
 export const EMPTY_STATE: VacuumState = {
@@ -199,6 +213,7 @@ export const EMPTY_STATE: VacuumState = {
   ota: null,
   activeMapId: null,
   savedMapIds: Object.freeze([]) as readonly number[],
+  lastStateUpdateAt: null,
 };
 
 type Patch = Partial<VacuumState>;

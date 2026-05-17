@@ -435,7 +435,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     const prev = this.#state;
     const patch = buildCloudPatch(prev, cs, match.online);
     if (Object.keys(patch).length > 0) {
-      this.#state = { ...prev, ...patch };
+      this.#state = { ...prev, ...patch, lastStateUpdateAt: new Date() };
       this.#emitLifecycleTransitions(prev, this.#state);
       this.emit("change", this.state);
     }
@@ -472,7 +472,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       };
       // Once the device reports idle/installed, clear the snapshot — OTA done.
       const settled = merged.state === "idle" || merged.state === "installed";
-      this.#state = { ...this.#state, ota: settled ? null : merged };
+      this.#state = { ...this.#state, ota: settled ? null : merged, lastStateUpdateAt: new Date() };
       this.emit("change", this.state);
       this.emit("ota", merged);
     });
@@ -497,6 +497,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
           ...prev,
           activeMapId: push.activeMapId,
           savedMapIds: push.savedMapIds,
+          lastStateUpdateAt: new Date(),
         };
         this.emit("change", this.state);
       }
@@ -1291,7 +1292,7 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     if (this.#state.online === online) {
       return;
     }
-    this.#state = { ...this.#state, online };
+    this.#state = { ...this.#state, online, lastStateUpdateAt: new Date() };
     this.emit("change", this.state);
   }
 
@@ -1469,6 +1470,21 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       }
     }
     if (next) {
+      // Some codes (e.g. `MopPadsMissing = 120`, the action-refusal "Mop
+      // not in place" code) push on `ERROR` (siid 2 piid 2) but never
+      // mirror onto `FAULTS_STR` (siid 4 piid 18). Without this union,
+      // `state.faults` would stay `[]` for the full latched window even
+      // though `state.errorCode` correctly reports the code. Treat
+      // errorCode as authoritative for "is *something* latched right now"
+      // and ensure faults contains it.
+      if (
+        next.errorCode !== null &&
+        next.errorCode !== 0 &&
+        !next.faults.includes(next.errorCode)
+      ) {
+        next = { ...next, faults: Object.freeze([next.errorCode, ...next.faults]) };
+      }
+      next = { ...next, lastStateUpdateAt: new Date() };
       this.#state = next;
       return true;
     }

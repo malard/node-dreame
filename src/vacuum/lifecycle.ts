@@ -94,6 +94,7 @@ export const ABORT_REASONS: Record<number, string> = {
   [MiotError.WheelRotationAnomaly]: "wheel-rotation-anomaly",
   [MiotError.RobotLifted]: "robot-lifted",
   [MiotError.ManualMopInstallRequired]: "manual-mop-install-required",
+  [MiotError.MopPadsMissing]: "mop-pads-missing",
   [MiotError.WastewaterTankFull]: "wastewater-tank-full",
   [MiotError.CleanWaterTankEmpty]: "clean-water-tank-empty",
   [MiotError.WashboardFilterNeedsCleaning]: "washboard-filter-needs-cleaning",

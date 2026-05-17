@@ -158,6 +158,20 @@ export enum MiotError {
   WastewaterTankFull = 105,
   CleanWaterTankEmpty = 107,
   WashboardFilterNeedsCleaning = 114,
+  /**
+   * Latched on `start()` when the mop pads are not seated on the robot.
+   * Observed on r2532a (fw 4.3.9_2199) 2026-05-17 — the Dreamehome app
+   * shows this as "Mop not in place, please check if the mop is in the
+   * dock, or install manually on the robot." Distinct from
+   * `ManualMopInstallRequired = 74` (which fires after the dock's
+   * auto-install sequence gives up at end-of-task); 120 is the
+   * action-refusal variant fired *at* `start()` rather than mid-task.
+   *
+   * Co-firing with `FAULTS_STR` (siid 4 piid 18) was NOT observed in
+   * the original repro (state.faults stayed empty for 30 minutes) — see
+   * GitHub #8 secondary issue. May only push on `ERROR` (siid 2 piid 2).
+   */
+  MopPadsMissing = 120,
   // ─── ASSUMED from Tasshack — battery / charging ─────────────────────
   /** Sensor-side "battery low" warning (distinct from `LowBatteryTurnOff`). Tasshack suppresses this code while charging. */
   BatteryLow = 20,
