@@ -1,4 +1,4 @@
-import type { DreameDevice, DreameRegion, DreameSession } from "./types.js";
+import type { DreameCloudState, DreameDevice, DreameRegion, DreameSession } from "./types.js";
 import { httpPostJsonBody, RequestContext, type BaseResponse } from "./http.js";
 
 export interface ListDevicesInput {
@@ -70,16 +70,65 @@ function toDevice(raw: RawDevice): DreameDevice {
   const did = String(raw.did ?? "");
   const model = String(raw.model ?? "");
   const name = String(raw.customName || raw.deviceName || model || did);
-  const online = raw.online === true || raw.lwt === 1;
+  // The cloud response uses two ways to express online: `online: true`
+  // OR a nested `property` JSON-string carrying `lwt: 1`. Honour both.
+  let lwtFlag = 0;
+  if (typeof raw["property"] === "string") {
+    try {
+      const parsed = JSON.parse(raw["property"] as string) as { lwt?: number };
+      if (parsed && typeof parsed.lwt === "number") {
+        lwtFlag = parsed.lwt;
+      }
+    } catch {
+      // ignore malformed JSON — fall back to `online`/top-level `lwt`
+    }
+  }
+  const online = raw.online === true || raw.lwt === 1 || lwtFlag === 1;
   const device: DreameDevice = {
     did,
     model,
     name,
     online,
     raw: raw as Record<string, unknown>,
+    cloudState: parseCloudState(raw),
   };
   if (raw.mac) {
     device.mac = String(raw.mac);
   }
+  if (typeof raw["ver"] === "string") {
+    device.firmwareVersion = raw["ver"];
+  }
+  if (typeof raw["sn"] === "string") {
+    device.serialNumber = raw["sn"];
+  }
   return device;
+}
+
+function parseCloudState(raw: RawDevice): DreameCloudState {
+  // `latestStatus` and `battery` come through as numbers at the top
+  // level of the list record. `videoStatus` is a JSON-encoded string
+  // whose `operation`/`status` fields tell us whether a session is
+  // active. `featureCode2` is the numeric capability bitfield.
+  const latestStatus = typeof raw["latestStatus"] === "number" ? raw["latestStatus"] : null;
+  const battery = typeof raw["battery"] === "number" ? raw["battery"] : null;
+  const featureCode2 = typeof raw["featureCode2"] === "number" ? raw["featureCode2"] : null;
+  let videoActive: boolean | null = null;
+  if (typeof raw["videoStatus"] === "string") {
+    try {
+      const parsed = JSON.parse(raw["videoStatus"] as string) as {
+        operType?: string;
+        status?: number;
+      };
+      // `operType: "end"` means session ended; `status: 1` + `operType: "monitor"`
+      // means an active stream. Any non-end / non-zero state counts as active.
+      if (parsed?.operType === "end" || parsed?.status === 0) {
+        videoActive = false;
+      } else if (parsed?.operType || parsed?.status) {
+        videoActive = true;
+      }
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+  return { latestStatus, battery, videoActive, featureCode2 };
 }

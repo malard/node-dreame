@@ -107,40 +107,50 @@ export enum ChargingStatus {
 }
 
 /**
- * VERIFIED enum for **siid 2 piid 2 (ERROR / fault code)** on r2532a.
+ * Error / fault code value space for **siid 2 piid 2 (ERROR)** and the
+ * multi-value fault-list mirror at **siid 4 piid 18 (FAULTS)**.
  *
- * 6 values catalogued live on 2026-05-02 (full cleaning task + a deliberate
- * wheel-spin user perturbation):
+ * Two tiers of members:
  *
- * - `0` — clear / no error
- * - `1` — wheel rotation anomaly (encoder reports motion that doesn't match
- *         commanded motor state — slip, forced rotation, debris, gear stuck).
- *         Auto-clears in ~12s once the cause resolves.
- * - `18` — robot lifted / wheels off ground. **Sticky** until physical resolution.
- * - `68` — task-complete notification. Fires together with the final
- *          MopDrying transition at end-of-task; not a fault. Sticky during
- *          the drying period.
- * - `74` — manual mop install required. Fires after auto-install attempts
- *          fail; auto-clears once the user manually installs the pads.
- * - `105` — wastewater (dirty-water) tank full. Refuses `start()` until the
- *           tank is emptied. VERIFIED 2026-05-12 by firing `start()` with the
- *           dirty-water tank physically full; error latched until cleared by
- *           emptying the tank (or by `stop()`).
- * - `107` — clean-water tank empty. Refuses `start()` until the tank is
- *           refilled. VERIFIED 2026-05-12 the same way — fired on `start()`
- *           with the clean-water reservoir empty, cleared on refill.
- * - `114` — washboard filter needs cleaning (maintenance reminder).
+ * **VERIFIED on r2532a** (X50 Ultra Complete) — observed live during a
+ * full cleaning task, a deliberate wheel-spin perturbation, and the
+ * 2026-05-12 tank-refusal probes:
  *
- * Most codes auto-clear when the underlying condition resolves — the
- * `CLEAR_WARNING` action is rarely needed. The string mirror at
- * `VACUUM_PROP.ERROR_STR_MIRROR` (siid 4 piid 18) co-fires within ~1ms.
+ *   - `Clear = 0` — clear / no error.
+ *   - `WheelRotationAnomaly = 1` — encoder reports motion that doesn't
+ *     match commanded motor state (slip, forced rotation, debris,
+ *     gear stuck). Auto-clears in ~12s once the cause resolves.
+ *   - `RobotLifted = 18` — robot lifted / wheels off ground. **Sticky**
+ *     until physical resolution.
+ *   - `TaskComplete = 68` — task-complete notification. Fires together
+ *     with the final MopDrying transition at end-of-task; not a fault.
+ *     Sticky during the drying period. (Tasshack labels 68 as
+ *     `REMOVE_MOP` for older Mi-cloud models — the meaning of code 68
+ *     differs between firmwares. We keep our VERIFIED r2532a label.)
+ *   - `ManualMopInstallRequired = 74` — fires after auto-install
+ *     attempts fail; auto-clears once the user manually installs the
+ *     pads.
+ *   - `WastewaterTankFull = 105` — refuses `start()` until the tank is
+ *     emptied. VERIFIED 2026-05-12.
+ *   - `CleanWaterTankEmpty = 107` — refuses `start()` until the tank
+ *     is refilled. VERIFIED 2026-05-12.
+ *   - `WashboardFilterNeedsCleaning = 114` — maintenance reminder.
  *
- * Other Tasshack-documented error codes (e.g. low battery, dustbin full)
- * likely use different ints on r2532a — treat any non-listed value as raw
- * and capture for cataloguing.
+ * **ASSUMED from Tasshack/dreame-vacuum** (`types.py:225-363` on dev
+ * branch) — borrowed names, not yet seen live on r2532a. Treat the
+ * label as a hint; the integer is the source of truth. Naming on the
+ * Dreamehome cloud may differ from Tasshack's Mi-cloud-era catalogue.
+ *
+ * Most codes auto-clear when the underlying condition resolves; the
+ * `CLEAR_WARNING` action is rarely needed. The string-typed fault-list
+ * mirror at `VACUUM_PROP.FAULTS_STR` (siid 4 piid 18) co-fires with
+ * every ERROR change and can carry MULTIPLE comma-separated codes when
+ * several conditions are latched simultaneously (e.g. tank empty +
+ * robot lifted). See `Vacuum.state.faults` for the parsed list.
  */
 export enum MiotError {
   Clear = 0,
+  // ─── VERIFIED on r2532a ─────────────────────────────────────────────
   WheelRotationAnomaly = 1,
   RobotLifted = 18,
   TaskComplete = 68,
@@ -148,6 +158,59 @@ export enum MiotError {
   WastewaterTankFull = 105,
   CleanWaterTankEmpty = 107,
   WashboardFilterNeedsCleaning = 114,
+  // ─── ASSUMED from Tasshack — battery / charging ─────────────────────
+  /** Sensor-side "battery low" warning (distinct from `LowBatteryTurnOff`). Tasshack suppresses this code while charging. */
+  BatteryLow = 20,
+  /** Charging fault — cable / pad contact issue, dock electrical problem. */
+  ChargeFault = 21,
+  /** Battery percentage anomaly (battery telemetry inconsistent). */
+  BatteryPercentageAnomaly = 22,
+  /** Robot reached the dock but received no charging current. */
+  ChargeNoElectric = 28,
+  /** Battery cell fault — hardware-level problem with the pack. */
+  BatteryFault = 29,
+  /**
+   * Robot powered itself off mid-task because the battery was depleted.
+   * Tasshack groups this with the user-clearable warnings — once the
+   * device recovers, the code goes away on its own. Highly likely the
+   * code that fired during the 2026-05-16 stranding incident on this
+   * project's r2532a.
+   */
+  LowBatteryTurnOff = 75,
+  // ─── ASSUMED from Tasshack — stuck family ───────────────────────────
+  /** Generic "robot is stuck" — no specific subtype. */
+  RobotStuck = 80,
+  /** Stuck and previous unstuck attempts failed (escalation). */
+  RobotStuckRepeat = 81,
+  /** Stuck (secondary code seen on newer firmwares). */
+  RobotStuck2 = 90,
+  /** Stuck under a table / piece of furniture. */
+  RobotStuckOnTables = 91,
+  /** Stuck in a narrow passage between rooms. */
+  RobotStuckOnPassage = 92,
+  /** Stuck on a threshold (room divider, door frame). */
+  RobotStuckOnThreshold = 93,
+  /** Stuck in a low-clearance area the chassis can't lift over. */
+  RobotStuckOnLowLyingArea = 94,
+  /** Stuck on a ramp / slope. */
+  RobotStuckOnRamp = 95,
+  /** Stuck on a discrete obstacle (toy, cable, shoe, …). */
+  RobotStuckOnObstacle = 96,
+  /** Stuck because of a pet (mostly the pet being in the path). */
+  RobotStuckOnPet = 97,
+  /** Slipping on a hard surface and can't make progress. */
+  RobotStuckOnSlipperySurface = 98,
+  /** Stuck on a thick / shaggy carpet. */
+  RobotStuckOnCarpet = 99,
+  /** Stuck on a curtain (entangled). */
+  RobotStuckOnCurtain = 200,
+  // ─── ASSUMED from Tasshack — bin / dock / dust ─────────────────────
+  /** Dust bin is full. */
+  BinFull = 101,
+  /** Dock disconnected (no comms with base station). */
+  StationDisconnected = 117,
+  /** Disposable dust bag in the dock is full. */
+  DustBagFull = 121,
 }
 
 /**

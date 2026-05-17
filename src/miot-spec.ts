@@ -51,12 +51,26 @@ export const VACUUM_PROP = {
    */
   ERROR: { siid: 2, piid: 2 } as const,
   /**
-   * VERIFIED on r2532a 2026-05-02 — string-typed mirror of `ERROR` (siid 2 piid 2).
-   * Co-fires within ~1ms of every ERROR transition (e.g. "0" → "74" → "0").
-   * Useful when consuming MIoT properties_changed batches where the int+string
-   * pair lets you correlate the error transition without a separate read.
+   * Fault-list mirror — co-fires within ~1ms of every `ERROR` (siid 2 piid 2)
+   * transition. VERIFIED on r2532a 2026-05-02 to track ERROR for single-fault
+   * cases (e.g. "0" → "74" → "0").
+   *
+   * **Multi-value semantics** (per Tasshack/dreame-vacuum `device.py:1342-1372`
+   * on dev branch): the device emits this as a **comma-separated string of
+   * fault codes** when more than one condition is latched simultaneously
+   * (e.g. `"18,107"` = robot lifted AND clean-water tank empty). `ERROR`
+   * itself only holds a single int, so this field is the source of truth
+   * for "everything currently wrong with the device."
+   *
+   * `Vacuum` parses this into `state.faults: MiotError[]`. The single-code
+   * case still echoes the same int into `state.errorCode` via `ERROR`, so
+   * consumers that only care about the most-recent code don't need to
+   * touch this field.
+   *
+   * Previously named `ERROR_STR_MIRROR` (pre-v0.4); the rename reflects
+   * the actual multi-value semantics.
    */
-  ERROR_STR_MIRROR: { siid: 4, piid: 18 } as const,
+  FAULTS_STR: { siid: 4, piid: 18 } as const,
   /**
    * VERIFIED on r2532a 2026-05-02 — mop-pad availability/transition state.
    * Observed values: `2` and `0`. Transitions are tightly synchronised with
@@ -155,6 +169,28 @@ export const VACUUM_PROP = {
   WATER_VOLUME: { siid: 4, piid: 5 } as const,
   /** VERIFIED on r2532a 2026-05-02 — boolean for "Resume Cleaning Mode" (auto-resume after dock/charge). */
   RESUME_CLEANING: { siid: 4, piid: 11 } as const,
+  /**
+   * ASSUMED from Tasshack/dreame-vacuum `types.py:1479` — relocation
+   * state machine. Values per Tasshack `DreameVacuumRelocationStatus`:
+   *   0  = Located
+   *   1  = Locating (re-localising — typically right after pickup)
+   *   10 = Failed
+   *   11 = Success
+   *
+   * Useful for detecting "user picked the robot up and put it down
+   * somewhere else" — a 0→1 transition is the canonical signal that
+   * the robot needs to re-establish its position. NOT YET observed
+   * live on r2532a; treat values as raw.
+   */
+  RELOCATION_STATUS: { siid: 4, piid: 20 } as const,
+  /**
+   * ASSUMED from Tasshack/dreame-vacuum `types.py:1506` — boolean
+   * marker for "this task was started by a schedule" (1/2/4 per
+   * Tasshack `device.py:8549`, 0 otherwise). Useful for disambiguating
+   * scheduled-clean failures from manual-trigger failures. NOT YET
+   * observed live on r2532a.
+   */
+  SCHEDULED_CLEAN: { siid: 4, piid: 47 } as const,
   /** VERIFIED on r2532a 2026-05-02 — Carpet Boost boolean (paired with FEATURE_CONFIG_JSON.RobotCarpetPressEnable). The JSON mirror is 3-state (-1 = blocked when carpet mode = Avoid; 0 = user-disabled; 1 = enabled). */
   CARPET_BOOST: { siid: 4, piid: 12 } as const,
   /** ASSUMED Tasshack types.py:587 — JSON payload for joystick control. Note: live joystick during the camera/remote-control session appears to bypass this and use a side-channel through the Aliyun video session (no MQTT echoes for joystick movement). */
@@ -312,23 +348,25 @@ export const VACUUM_PROP = {
    */
   TASK_PROGRESS_PCT: { siid: 4, piid: 63 } as const,
   /**
-   * VERIFIED on r2532a 2026-05-02..03 — generic **device-activity
-   * counter**. Resets to 0 at end-of-task (cleaning task summary
-   * fires) and then increments roughly once per minute for as long as
-   * the device is doing anything (cleaning, mop wash, mop dry, etc.).
+   * **Mop-drying progress counter** — ticks once per minute through the
+   * dock's drying cycle. VERIFIED on r2532a 2026-05-02..03: resets to 0
+   * at end-of-task (alongside the cleaning task-summary event) and then
+   * counts up while the dock is drying the mop pad (observed reaching
+   * 7+ during MopDrying). Co-aligned with `MiotState.MopDrying = 8`.
    *
-   * Originally labelled "task-sequence counter resets at task end" —
-   * the reset behaviour was correct, but the post-task increments
-   * (observed 2026-05-03 ticking through 0→7+ during MopDrying)
-   * showed the counter is broader than just active cleaning. Useful
-   * as a "device is doing something" heartbeat.
+   * **Naming history:** this property has been mislabelled twice. First
+   * as `SCHEDULE_PROP.EDIT_COUNTER` (disproved by the end-of-task reset
+   * capture 2026-05-02), then as `TASK_RESET_COUNTER` ("activity-scope"
+   * heartbeat). Cross-referenced against Tasshack/dreame-vacuum
+   * `types.py:1113` on the dev branch in 2026-05-17, which labels
+   * `siid 4 piid 64` as `DRYING_PROGRESS`. The minute-tick during
+   * MopDrying matches that interpretation exactly. Renamed to align.
    *
-   * Previously this property was misidentified as a schedule-edit
-   * counter (`SCHEDULE_PROP.EDIT_COUNTER`). The end-of-task reset
-   * captured on 2026-05-02 disproved that and confirmed the
-   * activity-scope interpretation.
+   * Consumers should read this as "minutes elapsed in the current dry
+   * cycle"; a 0→non-zero transition correlates with "task just ended,
+   * dock is now drying the pad."
    */
-  TASK_RESET_COUNTER: { siid: 4, piid: 64 } as const,
+  DRYING_PROGRESS: { siid: 4, piid: 64 } as const,
   /**
    * VERIFIED on r2532a 2026-05-02 — firmware-capability bitfield, fired once
    * per device reconnect. Observed value `31 = 0b11111` (5 capability bits

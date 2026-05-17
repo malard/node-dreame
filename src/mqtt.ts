@@ -76,6 +76,26 @@ export interface MapInfoPush {
   did: string;
   /** Parsed `map_info` keyed by numeric `mapId`. */
   maps: Map<number, readonly number[]>;
+  /**
+   * Map ID that the device is currently treating as **active** (the
+   * one whose live I-frame pushes are the "now" map). Derived from
+   * the payload's per-map token: maps with a single-element `[0]`
+   * token are inactive saved maps, while the active map carries a
+   * multi-element / non-zero token (e.g. `[5,10]`).
+   *
+   * `null` when no map matches the active-token heuristic (rare —
+   * typically means the device has no maps saved yet). The
+   * token-meaning ASSUMPTION is from a single live capture on
+   * r2532a 2026-05-17; treat as best-effort until cross-verified
+   * on another device / firmware.
+   */
+  activeMapId: number | null;
+  /**
+   * All map IDs the device knows about, sorted ascending. Includes
+   * the active map. Useful for rendering a floor picker without
+   * needing to walk the raw `maps` Map.
+   */
+  savedMapIds: readonly number[];
 }
 
 /**
@@ -427,10 +447,24 @@ export function parseMapInfo(
     }
     maps.set(id, ints);
   }
+  // Active-map detection: a map whose token has either length > 1 OR
+  // a non-zero first element. Single-`[0]` tokens flag inactive saved
+  // maps in every capture we've seen. If multiple maps qualify we pick
+  // the lowest ID (deterministic, matches observed order).
+  let activeMapId: number | null = null;
+  for (const [id, tok] of [...maps].sort((a, b) => a[0] - b[0])) {
+    if (tok.length > 1 || (tok.length === 1 && tok[0] !== 0)) {
+      activeMapId = id;
+      break;
+    }
+  }
+  const savedMapIds = Object.freeze([...maps.keys()].sort((a, b) => a - b));
   const did = params["did"];
   return {
     did: typeof did === "string" || typeof did === "number" ? String(did) : fallbackDid,
     maps,
+    activeMapId,
+    savedMapIds,
   };
 }
 

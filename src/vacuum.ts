@@ -23,10 +23,13 @@ import { getCapabilities, type DeviceCapabilities } from "./capabilities.js";
 import type { CallOptions, MiotAction, MiotProp } from "./commands.js";
 import {
   BATTERY_PROP,
+  ChargingStatus,
   CLOUD_OBJ_PROP,
   CONSUMABLE_PROP,
   CleaningMode,
   MiotError,
+  MiotState,
+  NOTIFICATION_PROP,
   SETTINGS_PROP,
   SuctionLevel,
   TOTALS_PROP,
@@ -127,6 +130,20 @@ export type RefreshResult =
   | { kind: "no-ack"; state: VacuumState };
 
 /**
+ * Outcome of `Vacuum.refreshFromCloud()`. Discriminated by `kind`.
+ *
+ *  - `"acked"` — cloud device-list call returned a record for this
+ *    device. `state.battery` and `state.miotState` were seeded from
+ *    the cached fields. `cloudState` carries the full parsed snapshot.
+ *  - `"missing"` — the device-list returned but didn't include this
+ *    `did`. The state was not modified. This is unusual; typically
+ *    means the device was unbound from the account.
+ */
+export type CloudRefreshResult =
+  | { kind: "acked"; state: VacuumState; cloudState: import("./types.js").DreameCloudState }
+  | { kind: "missing"; state: VacuumState };
+
+/**
  * Outcome of `Vacuum.verifyMqtt()`. Discriminated by `reason`.
  *
  * - `"ok"` — the broker echoed our trigger write back as a
@@ -201,19 +218,68 @@ export interface CleanOpts {
  * - `completed` — fires alongside `taskComplete`, carrying the same
  *   parsed `CleaningHistoryRecord`. Driven by the
  *   `event_occured siid 4 eiid 1` push.
- * - `aborted` — `errorCode` (siid 2 piid 2) transitions from `0`/null
- *   to a non-zero value that is NOT the benign end-of-task code
- *   `MiotError.TaskComplete` (68). Covers both "refused to start"
- *   (e.g. empty clean-water tank → code 107) and mid-task failure
- *   (e.g. robot lifted → code 18).
+ * - `aborted` — `errorCode` (siid 2 piid 2) transitions to a non-zero
+ *   value that is NOT the benign end-of-task code `MiotError.TaskComplete`
+ *   (68). Covers both "refused to start" (e.g. empty clean-water tank →
+ *   code 107) and mid-task failure (e.g. robot lifted → code 18). The
+ *   v0.4 detector also fires when our subscription joins while the
+ *   device is *already* latched in an error state (so a consumer that
+ *   subscribes mid-incident still hears about it); these carry
+ *   `inferred: "initial-state"`.
+ * - `aborted` with `reason: "disappeared"` — the active task was
+ *   running (`taskStatusRaw === 2`) and the MQTT subscription dropped
+ *   without a clean completion or explicit error. Inferred at the
+ *   moment of disconnect, carries `inferred: "mqtt-disconnect"`.
  *
  * `reason` is a kebab-case label derived from `MiotError` when the
- * code is known, or `"error-<n>"` for raw codes pending cataloguing.
+ * code is known, or `"error-<n>"` for raw codes pending cataloguing,
+ * or one of the dedicated string reasons (`"disappeared"`).
+ *
+ * `inferred` is present on aborts the library deduced from
+ * surrounding signals rather than from a direct `errorCode` transition:
+ *
+ *   - `"initial-state"` — first observation of an already-latched
+ *     error after subscribing. The errorCode/faults reflect what the
+ *     device was already in when we joined.
+ *   - `"mqtt-disconnect"` — connection dropped during an active task.
+ *     `errorCode` will be `0` (Clear) because no explicit fault
+ *     transition occurred — the abort is inferred from the disconnect.
  */
 export type TaskLifecycle =
   | { phase: "started"; at: Date }
   | { phase: "completed"; at: Date; record: CleaningHistoryRecord }
-  | { phase: "aborted"; at: Date; errorCode: number; reason: string };
+  | {
+      phase: "aborted";
+      at: Date;
+      errorCode: number;
+      reason: string;
+      faults: readonly number[];
+      inferred?: "initial-state" | "mqtt-disconnect";
+    };
+
+/**
+ * Battery-level lifecycle envelope. Debounced threshold crossings on
+ * the battery percentage — designed for consumers (dunbar-os, push-
+ * notification gateways) that want to alert on "battery getting low"
+ * without polling the raw number themselves.
+ *
+ * Phases (raise on first crossing into the band, suppress while still
+ * inside it, re-arm once battery climbs back above the next band up):
+ *
+ *   - `low` — battery dropped below 20% while not charging.
+ *   - `critical` — battery dropped below 10% while not charging.
+ *   - `depleted` — battery reached `0` OR the device went offline
+ *     while battery was already in `critical`. This is the closest
+ *     signal we can give to "robot powered itself off because the
+ *     battery ran out mid-job."
+ *   - `recovered` — battery climbed back above 25% (clears `low`
+ *     and `critical` arming). Always fires before a fresh `low`.
+ */
+export type BatteryLifecycle =
+  | { phase: "low"; at: Date; battery: number }
+  | { phase: "critical"; at: Date; battery: number }
+  | { phase: "depleted"; at: Date; battery: number | null; cause: "zero" | "offline-while-critical" }
+  | { phase: "recovered"; at: Date; battery: number };
 
 const ABORT_REASONS: Record<number, string> = {
   [MiotError.WheelRotationAnomaly]: "wheel-rotation-anomaly",
@@ -222,11 +288,38 @@ const ABORT_REASONS: Record<number, string> = {
   [MiotError.WastewaterTankFull]: "wastewater-tank-full",
   [MiotError.CleanWaterTankEmpty]: "clean-water-tank-empty",
   [MiotError.WashboardFilterNeedsCleaning]: "washboard-filter-needs-cleaning",
+  [MiotError.BatteryLow]: "battery-low",
+  [MiotError.ChargeFault]: "charge-fault",
+  [MiotError.BatteryPercentageAnomaly]: "battery-percentage-anomaly",
+  [MiotError.ChargeNoElectric]: "charge-no-electric",
+  [MiotError.BatteryFault]: "battery-fault",
+  [MiotError.LowBatteryTurnOff]: "low-battery-turn-off",
+  [MiotError.RobotStuck]: "robot-stuck",
+  [MiotError.RobotStuckRepeat]: "robot-stuck-repeat",
+  [MiotError.RobotStuck2]: "robot-stuck",
+  [MiotError.RobotStuckOnTables]: "robot-stuck-on-tables",
+  [MiotError.RobotStuckOnPassage]: "robot-stuck-on-passage",
+  [MiotError.RobotStuckOnThreshold]: "robot-stuck-on-threshold",
+  [MiotError.RobotStuckOnLowLyingArea]: "robot-stuck-on-low-lying-area",
+  [MiotError.RobotStuckOnRamp]: "robot-stuck-on-ramp",
+  [MiotError.RobotStuckOnObstacle]: "robot-stuck-on-obstacle",
+  [MiotError.RobotStuckOnPet]: "robot-stuck-on-pet",
+  [MiotError.RobotStuckOnSlipperySurface]: "robot-stuck-on-slippery-surface",
+  [MiotError.RobotStuckOnCarpet]: "robot-stuck-on-carpet",
+  [MiotError.RobotStuckOnCurtain]: "robot-stuck-on-curtain",
+  [MiotError.BinFull]: "bin-full",
+  [MiotError.StationDisconnected]: "station-disconnected",
+  [MiotError.DustBagFull]: "dust-bag-full",
 };
 
 function abortReason(code: number): string {
   return ABORT_REASONS[code] ?? `error-${code}`;
 }
+
+/** Battery thresholds. Hysteresis on the recovered edge avoids flapping. */
+const BATTERY_LOW_THRESHOLD = 20;
+const BATTERY_CRITICAL_THRESHOLD = 10;
+const BATTERY_RECOVERED_THRESHOLD = 25;
 
 /**
  * Event payload map for `Vacuum`. Keys are the strings the class emits
@@ -238,6 +331,15 @@ function abortReason(code: number): string {
  *   carrying the parsed per-task summary record.
  * - `taskLifecycle`: higher-level start / complete / abort envelope —
  *   subscribe once instead of state-watching. See `TaskLifecycle`.
+ * - `stuck`: fires when `NOTIFICATION_PROP.STUCK_NOTIFICATION_ACTIVE`
+ *   (siid 14 piid 4) transitions 0/null → 1. The device's own
+ *   "robot needs attention" flag — sticky for hours during a real
+ *   stuck event. Carries the current `errorCode`/`faults` snapshot
+ *   so consumers can disambiguate "post-task tank prompt" from
+ *   "robot is genuinely stuck."
+ * - `unstuck`: fires when the flag transitions 1 → 0.
+ * - `batteryLifecycle`: debounced battery-threshold crossings — `low`,
+ *   `critical`, `depleted`, `recovered`. See `BatteryLifecycle`.
  * - `ota`: convenience mirror of the underlying subscription's `ota`
  *   event after merge into the cached snapshot.
  * - `error`: forwarded from the underlying `DreameSubscription`.
@@ -246,6 +348,9 @@ export type VacuumEvents = {
   change: [VacuumState];
   taskComplete: [CleaningHistoryRecord];
   taskLifecycle: [TaskLifecycle];
+  stuck: [{ at: Date; errorCode: number | null; faults: readonly number[]; miotState: number | null }];
+  unstuck: [{ at: Date }];
+  batteryLifecycle: [BatteryLifecycle];
   ota: [OtaEvent];
   mapInfo: [MapInfoPush];
   error: [Error];
@@ -261,6 +366,24 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
   #capabilities: DeviceCapabilities | null = null;
   #pointerCache = new OssPointerCache();
   #pointerCaptureAttached = false;
+
+  // ─── lifecycle bookkeeping ─────────────────────────────────────────
+  //
+  // Tracks the "have we observed any property yet" gate that lets us
+  // distinguish a true 0→non-zero error transition (which fires
+  // `aborted`) from the initial seed of an already-latched error
+  // (which fires `aborted` with `inferred: "initial-state"`). Without
+  // this, a subscriber that joins a device already in an error state
+  // never hears about it.
+  #seenAnyError = false;
+
+  // Battery-threshold debounce: which phases are currently armed. The
+  // event fires on first entry into a band; suppressed while still in
+  // the same band; re-arms once battery climbs back above
+  // BATTERY_RECOVERED_THRESHOLD.
+  #batteryLowArmed = false;
+  #batteryCriticalArmed = false;
+  #batteryDepletedArmed = false;
 
   constructor(client: DreameClient, device: DreameDevice) {
     super();
@@ -342,13 +465,17 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     const props = [
       VACUUM_PROP.STATE,
       VACUUM_PROP.ERROR,
+      VACUUM_PROP.FAULTS_STR,
       VACUUM_PROP.TASK_STATUS,
+      VACUUM_PROP.RELOCATION_STATUS,
+      VACUUM_PROP.DRYING_PROGRESS,
       VACUUM_PROP.SUCTION_LEVEL,
       VACUUM_PROP.WATER_VOLUME,
       VACUUM_PROP.CLEANING_MODE,
       VACUUM_PROP.CLEANING_TIME,
       VACUUM_PROP.CLEANED_AREA,
       VACUUM_PROP.TASK_PROGRESS_PCT,
+      NOTIFICATION_PROP.STUCK_NOTIFICATION_ACTIVE,
       BATTERY_PROP.LEVEL,
       BATTERY_PROP.CHARGING_STATUS,
       SETTINGS_PROP.VOLUME,
@@ -358,8 +485,15 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     ];
     let kind: "acked" | "no-ack" = "acked";
     try {
+      const prev = this.#state;
       const results = await this.#client.getProperties(this.device.did, props, opts);
-      this.#applyBatch(results.filter((r) => r.code === 0 && r.value !== undefined));
+      const filtered = results.filter((r) => r.code === 0 && r.value !== undefined);
+      if (this.#applyBatch(filtered)) {
+        // refresh() also drives lifecycle/battery/stuck detection — a
+        // subscriber that calls refresh() before watch() should still
+        // hear about already-latched states.
+        this.#emitLifecycleTransitions(prev, this.#state);
+      }
       this.#setOnline(true);
     } catch (err) {
       if (err instanceof DreameDeviceOfflineError) {
@@ -370,6 +504,68 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     }
     this.emit("change", this.state);
     return { kind, state: this.state };
+  }
+
+  /**
+   * Refresh `state` from the **cloud device-list** HTTP endpoint —
+   * the lightweight fallback when `getProperties` is 80001-spinning.
+   *
+   * The Dreamehome cloud caches a small subset of the device's most-
+   * recent telemetry (`latestStatus`, `battery`, `videoStatus`,
+   * `featureCode2`) and serves it via the device-list endpoint. This
+   * endpoint is **separately reachable** from the MIoT property
+   * channel — on an idle device that's silent on MQTT and 80001-ing
+   * on `getProperties`, this is often the only HTTP path that still
+   * responds with usable state.
+   *
+   * Use cases:
+   *  - You want to know whether the device is online / charged / what
+   *    state it's in without paying the watch()-and-wait latency.
+   *  - You're in the post-deep-discharge recovery window where
+   *    everything else times out (see `probe-post-stuck-v2.jsonl`
+   *    from 2026-05-17).
+   *  - You want a `MiotState`/battery seed before a fresh user UI
+   *    binding renders.
+   *
+   * Mutates `state.battery` and `state.miotState`/`miotStateRaw`
+   * (and `online`) from the cached fields and fires `'change'`.
+   * Returns the parsed `cloudState` separately too for consumers
+   * that want the full snapshot. `state.faults`, `errorCode`,
+   * `taskStatusRaw` are NOT seeded — they aren't in the device-list
+   * response.
+   *
+   * Throws on auth/network errors (those need caller attention);
+   * doesn't swallow 80001 because the device-list endpoint doesn't
+   * use the per-device ACK waiter that 80001s.
+   */
+  async refreshFromCloud(): Promise<CloudRefreshResult> {
+    const devices = await this.#client.getDevices();
+    const match = devices.find((d) => d.did === this.device.did);
+    if (!match || !match.cloudState) {
+      return { kind: "missing", state: this.state };
+    }
+    const cs = match.cloudState;
+    const prev = this.#state;
+    const patch: Partial<VacuumState> = {};
+    if (cs.battery !== null) {
+      patch.battery = cs.battery;
+    }
+    if (cs.latestStatus !== null) {
+      patch.miotStateRaw = cs.latestStatus;
+      patch.miotState =
+        cs.latestStatus in (MiotState as unknown as object)
+          ? (cs.latestStatus as MiotState)
+          : null;
+    }
+    if (match.online !== prev.online) {
+      patch.online = match.online;
+    }
+    if (Object.keys(patch).length > 0) {
+      this.#state = { ...prev, ...patch };
+      this.#emitLifecycleTransitions(prev, this.#state);
+      this.emit("change", this.state);
+    }
+    return { kind: "acked", state: this.state, cloudState: cs };
   }
 
   /**
@@ -415,9 +611,61 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
         }
       }
     });
-    this.#subscription.on("mapInfo", (push: MapInfoPush) => this.emit("mapInfo", push));
+    this.#subscription.on("mapInfo", (push: MapInfoPush) => {
+      // Seed state.activeMapId / savedMapIds from the push so consumers
+      // that only bind to `'change'` still see the map catalogue.
+      const prev = this.#state;
+      const sameSaved =
+        prev.savedMapIds.length === push.savedMapIds.length &&
+        prev.savedMapIds.every((id, i) => id === push.savedMapIds[i]);
+      if (prev.activeMapId !== push.activeMapId || !sameSaved) {
+        this.#state = {
+          ...prev,
+          activeMapId: push.activeMapId,
+          savedMapIds: push.savedMapIds,
+        };
+        this.emit("change", this.state);
+      }
+      this.emit("mapInfo", push);
+    });
     this.#subscription.on("connect", () => this.#setOnline(true));
-    this.#subscription.on("close", () => this.#setOnline(false));
+    this.#subscription.on("close", () => {
+      // Before flipping online → false: if a task was actively running
+      // when the connection dropped, infer an abort. This is the
+      // closest signal we can give consumers to "robot abandoned the
+      // job mid-clean" (e.g. battery died, network outage, device
+      // power-cycled). `errorCode` is whatever the device last
+      // reported — typically 0/Clear, since the device usually never
+      // had a chance to publish a fault before disappearing.
+      const prev = this.#state;
+      if (prev.taskStatusRaw === 2 && prev.online !== false) {
+        const code = prev.errorCode ?? 0;
+        this.emit("taskLifecycle", {
+          phase: "aborted",
+          at: new Date(),
+          errorCode: code,
+          reason: "disappeared",
+          faults: prev.faults,
+          inferred: "mqtt-disconnect",
+        });
+        // If battery was already critical when the connection dropped,
+        // that's a strong "battery ran out" signal — fire `depleted`.
+        if (
+          prev.battery !== null &&
+          prev.battery <= BATTERY_CRITICAL_THRESHOLD &&
+          !this.#batteryDepletedArmed
+        ) {
+          this.#batteryDepletedArmed = true;
+          this.emit("batteryLifecycle", {
+            phase: "depleted",
+            at: new Date(),
+            battery: prev.battery,
+            cause: "offline-while-critical",
+          });
+        }
+      }
+      this.#setOnline(false);
+    });
     this.#subscription.on("error", (err) => this.emit("error", err));
   }
 
@@ -1195,23 +1443,130 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       this.emit("taskLifecycle", { phase: "started", at: new Date() });
     }
 
-    // `aborted`: errorCode transitions 0 → non-zero, excluding the benign
-    // end-of-task code (`MiotError.TaskComplete` = 68) which co-fires with
-    // normal completion. Initial null → non-zero is suppressed for the same
-    // reason as above.
-    if (
-      prev.errorCode === MiotError.Clear &&
+    // `aborted`: errorCode transitions 0/null → non-zero, excluding the
+    // benign end-of-task code (`MiotError.TaskComplete` = 68) which
+    // co-fires with normal completion.
+    //
+    // **Initial-state gap fix (v0.4):** the prior rule suppressed the
+    // first null → non-zero transition to avoid phantom aborts at
+    // subscription time. That meant a consumer subscribing to a device
+    // already latched in (say) `WastewaterTankFull` would never hear
+    // about it. The new rule still suppresses the null → 0 / null → 68
+    // cases (those aren't really aborts), but DOES emit for null → real
+    // error — flagged with `inferred: "initial-state"` so consumers can
+    // distinguish "we just joined and the device was already broken"
+    // from "the device just broke right now."
+    const errChanged = prev.errorCode !== next.errorCode;
+    const nextHasError =
       next.errorCode !== null &&
       next.errorCode !== MiotError.Clear &&
-      next.errorCode !== MiotError.TaskComplete
-    ) {
-      this.emit("taskLifecycle", {
+      next.errorCode !== MiotError.TaskComplete;
+    if (errChanged && nextHasError && next.errorCode !== null) {
+      const inferred = !this.#seenAnyError && prev.errorCode === null;
+      const ev: TaskLifecycle = {
         phase: "aborted",
         at: new Date(),
         errorCode: next.errorCode,
         reason: abortReason(next.errorCode),
+        faults: next.faults,
+      };
+      if (inferred) {
+        ev.inferred = "initial-state";
+      }
+      this.emit("taskLifecycle", ev);
+    }
+    if (next.errorCode !== null) {
+      this.#seenAnyError = true;
+    }
+
+    // `stuck` / `unstuck`: STUCK_NOTIFICATION_ACTIVE flag transitions.
+    // The flag is sticky — only fire on actual edges. Initial null →
+    // true also fires (a consumer that joins while the device is
+    // already stuck still wants the event).
+    if (prev.stuck !== true && next.stuck === true) {
+      this.emit("stuck", {
+        at: new Date(),
+        errorCode: next.errorCode,
+        faults: next.faults,
+        miotState: next.miotStateRaw,
+      });
+    } else if (prev.stuck === true && next.stuck === false) {
+      this.emit("unstuck", { at: new Date() });
+    }
+
+    // Battery threshold crossings — debounced via `#battery*Armed`.
+    // Only meaningful when battery is known AND device isn't actively
+    // charging (a robot in the dock dropping through the thresholds
+    // would be a battery telemetry glitch, not a real situation).
+    this.#emitBatteryTransitions(prev, next);
+  }
+
+  /**
+   * Battery-threshold detector. Fires `low`/`critical`/`depleted` on
+   * the first crossing into each band; `recovered` when battery climbs
+   * back above `BATTERY_RECOVERED_THRESHOLD` and clears the arming so
+   * future drops can fire again.
+   *
+   * The `depleted` event also fires on a `0` reading regardless of
+   * charging state — that's an unambiguous "ran out" signal. The
+   * `low`/`critical` events suppress while charging to avoid flapping
+   * during a return-to-dock cycle that happens to land at low battery.
+   */
+  #emitBatteryTransitions(prev: VacuumState, next: VacuumState): void {
+    const battery = next.battery;
+    if (battery === null) {
+      return;
+    }
+    const charging = next.charging === ChargingStatus.Charging;
+
+    // depleted on zero — fires regardless of charging state.
+    if (battery === 0 && !this.#batteryDepletedArmed) {
+      this.#batteryDepletedArmed = true;
+      this.emit("batteryLifecycle", {
+        phase: "depleted",
+        at: new Date(),
+        battery,
+        cause: "zero",
       });
     }
+
+    // critical / low — suppress while charging.
+    if (!charging) {
+      if (
+        battery <= BATTERY_CRITICAL_THRESHOLD &&
+        !this.#batteryCriticalArmed
+      ) {
+        this.#batteryCriticalArmed = true;
+        this.emit("batteryLifecycle", {
+          phase: "critical",
+          at: new Date(),
+          battery,
+        });
+      } else if (
+        battery <= BATTERY_LOW_THRESHOLD &&
+        !this.#batteryLowArmed
+      ) {
+        this.#batteryLowArmed = true;
+        this.emit("batteryLifecycle", { phase: "low", at: new Date(), battery });
+      }
+    }
+
+    // recovered — re-arm the lower bands once battery climbs back up.
+    // Don't require non-null prev.battery; a 25%+ first reading after
+    // charging recovery should clear the depleted/critical/low gating.
+    if (
+      battery >= BATTERY_RECOVERED_THRESHOLD &&
+      (this.#batteryLowArmed || this.#batteryCriticalArmed || this.#batteryDepletedArmed)
+    ) {
+      this.#batteryLowArmed = false;
+      this.#batteryCriticalArmed = false;
+      this.#batteryDepletedArmed = false;
+      // Only emit the public `recovered` event when something was
+      // actually armed; avoids a phantom at first reading post-watch.
+      this.emit("batteryLifecycle", { phase: "recovered", at: new Date(), battery });
+    }
+
+    void prev;
   }
 
   #applyBatch(
@@ -1223,12 +1578,13 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       if (!handler) {
         continue;
       }
-      const num = typeof c.value === "number" ? c.value : null;
-      const patch = handler(num);
+      // Pass the raw value: most handlers expect a number but the
+      // `FAULTS_STR` handler needs the string form to split.
+      const patch = handler(c.value);
       const cur: VacuumState = next ?? this.#state;
       let differs = false;
       for (const k of Object.keys(patch) as Array<keyof VacuumState>) {
-        if (cur[k] !== patch[k]) {
+        if (!fieldsEqual(cur[k], patch[k])) {
           differs = true;
           break;
         }
@@ -1243,5 +1599,30 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
     }
     return false;
   }
+}
+
+/**
+ * Value-equality check used by `Vacuum.#applyBatch` to detect whether
+ * a property push actually moved a field. Identity works for the
+ * primitive fields (numbers, booleans, nulls) but the `faults`
+ * array is freshly allocated on every push, so reference inequality
+ * would mark every same-list push as a change. Compare by element.
+ */
+function fieldsEqual(a: unknown, b: unknown): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) {
+      return false;
+    }
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
 }
 

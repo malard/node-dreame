@@ -12,6 +12,7 @@ import {
   ChargingStatus,
   CleaningMode,
   MiotState,
+  NOTIFICATION_PROP,
   SETTINGS_PROP,
   SuctionLevel,
   VACUUM_PROP,
@@ -34,8 +35,67 @@ export interface VacuumState {
   miotState: MiotState | null;
   /** Raw int from siid 2 piid 1 — present even when outside the known enum. */
   miotStateRaw: number | null;
-  /** Error/fault code (siid 2 piid 2). 0 = clear. */
+  /**
+   * Single-value error code (siid 2 piid 2). 0 = clear.
+   *
+   * The device only surfaces ONE code here even when multiple
+   * conditions are latched simultaneously. For the full set of latched
+   * faults read `faults` instead — that's parsed from the multi-value
+   * `FAULTS_STR` mirror (siid 4 piid 18) and is the source of truth
+   * for "everything currently wrong."
+   */
   errorCode: number | null;
+  /**
+   * Full list of currently-latched fault codes, parsed from
+   * `FAULTS_STR` (siid 4 piid 18). Empty when no faults. Typically
+   * one element (matching `errorCode`); multiple elements when
+   * several conditions are latched at once (e.g. robot lifted AND
+   * clean-water tank empty: `[18, 107]`).
+   *
+   * Codes are returned as raw ints; cross-reference `MiotError` for
+   * the catalogued labels. Unknown codes pass through verbatim.
+   */
+  faults: readonly number[];
+  /**
+   * **Stuck flag** — `siid 14 piid 4` (NOTIFICATION_PROP.STUCK_NOTIFICATION_ACTIVE).
+   *
+   * The device's "robot needs attention" boolean — used by the
+   * Dreamehome app to drive the orange-attention-bar prompts. Sticky
+   * for the lifetime of the stuck condition; per VERIFIED memory on
+   * r2532a, stays pinned at `1` for hours during a real stuck event
+   * until the user intervenes.
+   *
+   * Triggers observed live: navigation/stuck warnings, post-task
+   * water-tank service alerts ("refill clean / empty wastewater"),
+   * genuine multi-hour stuck conditions. Disambiguate by stickiness
+   * and correlation with `errorCode` / `faults` / `miotState`.
+   *
+   * The `'stuck'` event on `Vacuum` is emitted on 0/null → 1
+   * transitions; `state.stuck` carries the current latched value
+   * so a UI binding stays consistent across reconnects.
+   */
+  stuck: boolean | null;
+  /**
+   * **Mop-drying progress in minutes** — `siid 4 piid 64`
+   * (`VACUUM_PROP.DRYING_PROGRESS`). Counts up from 0 once per minute
+   * during the post-task drying cycle (`MiotState.MopDrying = 8`),
+   * resets to 0 when the cycle finishes or a new task starts.
+   *
+   * `null` when the device hasn't pushed this property yet (most
+   * common state — only ticks during drying).
+   */
+  dryingProgressMin: number | null;
+  /**
+   * Raw `siid 4 piid 20` (`RELOCATION_STATUS`). ASSUMED from Tasshack:
+   *   0  Located, 1 Locating, 10 Failed, 11 Success.
+   *
+   * A 0→1 transition is the signal that the user has picked the
+   * robot up — useful for distinguishing "robot was rescued from
+   * stranding and is recovering" from "robot finished cleanly."
+   *
+   * Not yet observed on r2532a; kept as raw int until verified.
+   */
+  relocationStatusRaw: number | null;
 
   /**
    * Dreame "task status" raw int (siid 4 piid 1).
@@ -97,12 +157,27 @@ export interface VacuumState {
    * back to `state: "idle"` or `state: "installed"`. Useful for UI progress bars.
    */
   ota: OtaEvent | null;
+  /**
+   * Map ID currently treated as active by the device (the "now"
+   * floor). Driven by the `mapInfo` push on `_sync.update_vacuum_mapinfo`;
+   * `null` until the first such push lands. See `MapInfoPush.activeMapId`.
+   */
+  activeMapId: number | null;
+  /**
+   * All saved-map IDs the device has, sorted ascending. Empty until
+   * the first `mapInfo` push lands. See `MapInfoPush.savedMapIds`.
+   */
+  savedMapIds: readonly number[];
 }
 
 export const EMPTY_STATE: VacuumState = {
   miotState: null,
   miotStateRaw: null,
   errorCode: null,
+  faults: Object.freeze([]) as readonly number[],
+  stuck: null,
+  dryingProgressMin: null,
+  relocationStatusRaw: null,
   taskStatusRaw: null,
   battery: null,
   charging: null,
@@ -122,13 +197,26 @@ export const EMPTY_STATE: VacuumState = {
   filterLeftPct: null,
   online: null,
   ota: null,
+  activeMapId: null,
+  savedMapIds: Object.freeze([]) as readonly number[],
 };
 
 type Patch = Partial<VacuumState>;
-type Applier = (num: number | null) => Patch;
+/**
+ * Handlers receive the raw MIoT property value (which may be a number,
+ * a string, or `null`/`undefined` when the device sent a non-scalar).
+ * Most handlers coerce to a number internally; the `FAULTS_STR` handler
+ * needs the string form to split it.
+ */
+type Applier = (value: unknown) => Patch;
 
 export function propKey(p: { siid: number; piid: number }): string {
   return `${p.siid}.${p.piid}`;
+}
+
+/** Coerce a raw MIoT value to a number or null. */
+function asNum(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
 }
 
 /** Narrow a raw int to an enum member, or null if it's not a known value. */
@@ -137,40 +225,83 @@ function asEnum<T extends number>(num: number | null, enumObj: object): T | null
 }
 
 /**
- * Each handler maps a single MIoT property push (numeric value, possibly
- * null if the device sent a non-number) to a partial state patch. The
- * `Vacuum` class looks up the right handler by `siid.piid`, computes the
- * patch, and merges it into state.
+ * Parse the multi-value `FAULTS_STR` (siid 4 piid 18) string into an
+ * array of fault-code ints. Per Tasshack/dreame-vacuum `device.py:1342-1372`
+ * on dev branch, the device sends a comma-separated list when several
+ * conditions are latched simultaneously; the single-fault case is just
+ * the int as a string.
+ *
+ * Empty / `"0"` / whitespace-only collapse to an empty array. Unknown
+ * codes are kept as raw ints — callers cross-reference `MiotError`.
+ */
+function parseFaultList(value: unknown): readonly number[] {
+  if (typeof value !== "string") {
+    // The device occasionally pushes a single int directly (no string-encoding).
+    // Accept that as a one-element list when non-zero.
+    if (typeof value === "number" && value !== 0) {
+      return Object.freeze([value]);
+    }
+    return Object.freeze([]);
+  }
+  const trimmed = value.trim();
+  if (trimmed === "" || trimmed === "0") {
+    return Object.freeze([]);
+  }
+  const codes: number[] = [];
+  for (const part of trimmed.split(",")) {
+    const n = Number.parseInt(part.trim(), 10);
+    if (Number.isFinite(n) && n !== 0) {
+      codes.push(n);
+    }
+  }
+  return Object.freeze(codes);
+}
+
+/**
+ * Each handler maps a single MIoT property push to a partial state
+ * patch. The `Vacuum` class looks up the right handler by `siid.piid`,
+ * computes the patch, and merges it into state.
  */
 export const APPLIERS: Record<string, Applier> = {
-  [propKey(VACUUM_PROP.STATE)]: (num) => ({
-    miotStateRaw: num,
-    miotState: asEnum<MiotState>(num, MiotState),
-  }),
-  [propKey(VACUUM_PROP.ERROR)]: (num) => ({ errorCode: num }),
-  [propKey(VACUUM_PROP.TASK_STATUS)]: (num) => ({ taskStatusRaw: num }),
-  [propKey(BATTERY_PROP.LEVEL)]: (num) => ({ battery: num }),
-  [propKey(BATTERY_PROP.CHARGING_STATUS)]: (num) => ({
-    chargingRaw: num,
-    charging: asEnum<ChargingStatus>(num, ChargingStatus),
-  }),
-  [propKey(VACUUM_PROP.SUCTION_LEVEL)]: (num) => ({
-    suctionRaw: num,
-    suction: asEnum<SuctionLevel>(num, SuctionLevel),
-  }),
-  [propKey(VACUUM_PROP.WATER_VOLUME)]: (num) => ({
-    waterVolumeRaw: num,
-    waterVolume: asEnum<WaterVolume>(num, WaterVolume),
-  }),
-  [propKey(VACUUM_PROP.CLEANING_MODE)]: (num) => ({
-    cleaningModeRaw: num,
-    cleaningMode: num !== null && num >= 0 && num <= 3 ? (num as CleaningMode) : null,
-  }),
-  [propKey(VACUUM_PROP.CLEANING_TIME)]: (num) => ({ cleaningTimeMin: num }),
-  [propKey(VACUUM_PROP.CLEANED_AREA)]: (num) => ({ cleanedAreaSqm: num }),
-  [propKey(VACUUM_PROP.TASK_PROGRESS_PCT)]: (num) => ({ taskProgressPct: num }),
-  [propKey(SETTINGS_PROP.VOLUME)]: (num) => ({ volume: num }),
-  [propKey(CONSUMABLE_PROP.MAIN_BRUSH_LEFT)]: (num) => ({ mainBrushLeftPct: num }),
-  [propKey(CONSUMABLE_PROP.SIDE_BRUSH_LEFT)]: (num) => ({ sideBrushLeftPct: num }),
-  [propKey(CONSUMABLE_PROP.FILTER_LEFT)]: (num) => ({ filterLeftPct: num }),
+  [propKey(VACUUM_PROP.STATE)]: (value) => {
+    const num = asNum(value);
+    return { miotStateRaw: num, miotState: asEnum<MiotState>(num, MiotState) };
+  },
+  [propKey(VACUUM_PROP.ERROR)]: (value) => ({ errorCode: asNum(value) }),
+  [propKey(VACUUM_PROP.FAULTS_STR)]: (value) => ({ faults: parseFaultList(value) }),
+  [propKey(VACUUM_PROP.TASK_STATUS)]: (value) => ({ taskStatusRaw: asNum(value) }),
+  [propKey(VACUUM_PROP.RELOCATION_STATUS)]: (value) => ({ relocationStatusRaw: asNum(value) }),
+  [propKey(VACUUM_PROP.DRYING_PROGRESS)]: (value) => ({ dryingProgressMin: asNum(value) }),
+  [propKey(NOTIFICATION_PROP.STUCK_NOTIFICATION_ACTIVE)]: (value) => {
+    const num = asNum(value);
+    return { stuck: num === null ? null : num !== 0 };
+  },
+  [propKey(BATTERY_PROP.LEVEL)]: (value) => ({ battery: asNum(value) }),
+  [propKey(BATTERY_PROP.CHARGING_STATUS)]: (value) => {
+    const num = asNum(value);
+    return { chargingRaw: num, charging: asEnum<ChargingStatus>(num, ChargingStatus) };
+  },
+  [propKey(VACUUM_PROP.SUCTION_LEVEL)]: (value) => {
+    const num = asNum(value);
+    return { suctionRaw: num, suction: asEnum<SuctionLevel>(num, SuctionLevel) };
+  },
+  [propKey(VACUUM_PROP.WATER_VOLUME)]: (value) => {
+    const num = asNum(value);
+    return { waterVolumeRaw: num, waterVolume: asEnum<WaterVolume>(num, WaterVolume) };
+  },
+  [propKey(VACUUM_PROP.CLEANING_MODE)]: (value) => {
+    const num = asNum(value);
+    return {
+      cleaningModeRaw: num,
+      cleaningMode: num !== null && num >= 0 && num <= 3 ? (num as CleaningMode) : null,
+    };
+  },
+  [propKey(VACUUM_PROP.CLEANING_TIME)]: (value) => ({ cleaningTimeMin: asNum(value) }),
+  [propKey(VACUUM_PROP.CLEANED_AREA)]: (value) => ({ cleanedAreaSqm: asNum(value) }),
+  [propKey(VACUUM_PROP.TASK_PROGRESS_PCT)]: (value) => ({ taskProgressPct: asNum(value) }),
+  [propKey(SETTINGS_PROP.VOLUME)]: (value) => ({ volume: asNum(value) }),
+  [propKey(CONSUMABLE_PROP.MAIN_BRUSH_LEFT)]: (value) => ({ mainBrushLeftPct: asNum(value) }),
+  [propKey(CONSUMABLE_PROP.SIDE_BRUSH_LEFT)]: (value) => ({ sideBrushLeftPct: asNum(value) }),
+  [propKey(CONSUMABLE_PROP.FILTER_LEFT)]: (value) => ({ filterLeftPct: asNum(value) }),
 };
+

@@ -145,6 +145,34 @@ describe("Vacuum.verifyMqtt", () => {
     await vacuum.unwatch();
   });
 
+  it("skips the trigger write when the read can't surface a current value", async () => {
+    // Regression: previously the verify probe fell through to a hardcoded
+    // value=50 default when the read returned code !== 0, silently mutating
+    // the user's voice volume. The probe must NEVER write a guessed value
+    // — if we don't know the current value, skip the trigger and rely on
+    // organic pushes (or no-echo) for the result.
+    const sub = new FakeSubscription();
+    let writes = 0;
+    const vacuum = new Vacuum(
+      fakeClient(
+        {
+          reads: async () => [{ siid: 7, piid: 1, value: undefined, code: -1 }],
+          writes: async () => {
+            writes++;
+            return [{ siid: 7, piid: 1, code: 0 }];
+          },
+        },
+        sub,
+      ),
+      DEVICE,
+    );
+    await vacuum.watch();
+    const result = await vacuum.verifyMqtt({ timeoutMs: 30 });
+    expect(writes).toBe(0);
+    expect(result.reason).toBe("no-echo");
+    await vacuum.unwatch();
+  });
+
   it("rethrows non-80001 errors from the cloud round-trip", async () => {
     const sub = new FakeSubscription();
     const vacuum = new Vacuum(

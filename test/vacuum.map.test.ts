@@ -138,7 +138,12 @@ describe("Vacuum.map", () => {
       events.push({ did: push.did, mapsKeys: [...push.maps.keys()] });
     });
 
-    sub.emit("mapInfo", { did: "DID-1", maps: new Map([[0, [5, 10]], [3, [0]]]) });
+    sub.emit("mapInfo", {
+      did: "DID-1",
+      maps: new Map([[0, [5, 10]], [3, [0]]]),
+      activeMapId: 0,
+      savedMapIds: Object.freeze([0, 3]) as readonly number[],
+    });
 
     expect(events).toHaveLength(1);
     expect(events[0]!.did).toBe("DID-1");

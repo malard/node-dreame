@@ -48,4 +48,51 @@ export interface DreameDevice {
   online: boolean;
   /** Raw record from the cloud, kept for forward compatibility. */
   raw: Record<string, unknown>;
+  /**
+   * Firmware version string from the cloud listing (e.g. `"4.3.9_2199"`).
+   * Surfaces `raw.ver` as a typed top-level field.
+   */
+  firmwareVersion?: string;
+  /** Serial number from the cloud listing. Surfaces `raw.sn`. */
+  serialNumber?: string;
+  /**
+   * Cloud-cached device state, distilled from the `device list` HTTP
+   * response. The cloud serves these fields reliably even when
+   * `getProperties` is timing out (code 80001) — useful as a fallback
+   * snapshot for an otherwise-silent device.
+   *
+   * `null` fields indicate the cloud didn't include that field in the
+   * response (rare). The numbers carry the device's last-known values
+   * — they may lag a few seconds behind reality.
+   */
+  cloudState?: DreameCloudState;
+}
+
+/**
+ * Cloud-cached subset of device state, parsed from the device-list
+ * response. Each field has a direct equivalent in the live MIoT
+ * property catalogue, but is served via the lighter-weight HTTP
+ * endpoint that handles 80001-prone devices gracefully.
+ */
+export interface DreameCloudState {
+  /**
+   * Most-recent MIoT state int (mirrors `VACUUM_PROP.STATE`, siid 2 piid 1).
+   * E.g. `13` = ChargingComplete, `2` = Standby/Cleaning. Cross-reference
+   * with `MiotState`.
+   */
+  latestStatus: number | null;
+  /** Battery percentage 0-100 (mirrors `BATTERY_PROP.LEVEL`). */
+  battery: number | null;
+  /**
+   * Camera streaming session state. `true` when an Aliyun LinkVisual
+   * video session is currently active; `false` when ended. Derived from
+   * the JSON-string `videoStatus` field in the cloud response.
+   */
+  videoActive: boolean | null;
+  /**
+   * `featureCode2` — same value space as `VACUUM_PROP.FIRMWARE_CAPABILITY`
+   * (siid 4 piid 83). Bitfield advertising what feature subsystems the
+   * firmware supports (live-map, OTA channel, AI obstacle, …).
+   */
+  featureCode2: number | null;
 }

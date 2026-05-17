@@ -81,11 +81,27 @@ For notification-style consumers there's also a single envelope event covering s
 vacuum.on("taskLifecycle", (ev) => {
   if (ev.phase === "started")   console.log("cleaning started");
   if (ev.phase === "completed") console.log("done:", ev.record);
-  if (ev.phase === "aborted")   console.log(`robot needs attention: ${ev.reason}`);
+  if (ev.phase === "aborted")   console.log(`robot needs attention: ${ev.reason}`, ev.faults);
 });
 ```
 
-`reason` is derived from `MiotError` — known refusal codes surface as `clean-water-tank-empty`, `wastewater-tank-full`, `robot-lifted`, etc.; unknown codes fall through as `error-<n>`.
+`reason` is derived from `MiotError` — known refusal codes surface as `clean-water-tank-empty`, `wastewater-tank-full`, `robot-lifted`, etc.; unknown codes fall through as `error-<n>`. `ev.faults` is the **full list** of currently-latched fault codes (the device can latch several at once; the single-value `errorCode` only holds one).
+
+Two further envelope events cover the "robot needs human attention" surface:
+
+```ts
+vacuum.on("stuck", (ev) => console.log(`stuck: error=${ev.errorCode}, faults=${ev.faults}`));
+vacuum.on("unstuck", () => console.log("user freed the robot"));
+
+vacuum.on("batteryLifecycle", (ev) => {
+  if (ev.phase === "low")       console.log(`battery low: ${ev.battery}%`);
+  if (ev.phase === "critical")  console.log(`battery critical: ${ev.battery}%`);
+  if (ev.phase === "depleted")  console.log(`battery depleted (${ev.cause})`);
+  if (ev.phase === "recovered") console.log(`battery recovered to ${ev.battery}%`);
+});
+```
+
+`stuck` fires when the device's own "needs attention" flag (siid 14 piid 4) transitions to active — sticky for hours during a real stuck event, fires briefly post-task for tank-prompts. `batteryLifecycle` fires debounced threshold crossings: `low` at 20%, `critical` at 10%, `depleted` at 0% or on `close` while battery was critical (closest signal to "robot ran out mid-job"), `recovered` at 25% (clears the arming).
 
 The MQTT channel is **passive** — the device only pushes when state changes, so a quiet idle window can look indistinguishable from a broken subscription. Use the first-class verifier to remove the ambiguity:
 
@@ -102,6 +118,7 @@ if (r.reason !== "ok") { console.error("subscription not healthy:", r.reason); }
 
 1. **`refresh()` returning `kind: "acked"`** — seeds every tracked field in one HTTP round-trip. When the cloud returns 80001 (`refresh()` resolves to `kind: "no-ack"`), no seeding happens; fields stay where they were.
 2. **MQTT `properties_changed` pushes** — the device emits these on every state change after `watch()`. Each push patches one or more fields. On a quiet idle device (charging on the dock, no errors) push rate can sit at zero for minutes.
+3. **`refreshFromCloud()`** — fallback for when the MIoT property channel is silent and `getProperties` is 80001-spinning. The Dreamehome cloud caches `latestStatus` / `battery` / `videoStatus` / `featureCode2` per device in the device-list endpoint and serves them reliably even when the device itself is unresponsive on the per-property path. Seeds `state.battery` and `state.miotState`, returns the parsed `DreameCloudState` snapshot. Use this when you need to know what shape the device is in right now without waiting for an MQTT push that may never come.
 
 Practical consequence: don't assume `state` is fully populated immediately after `watch()`. Treat the `'change'` event as the source of truth and re-render whenever it fires. Call `refresh()` opportunistically — when it acks you get a full snapshot, when it no-acks you've lost nothing.
 

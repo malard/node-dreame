@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- New `stuck` and `unstuck` events on `Vacuum`, driven by the device's
+  own "needs attention" flag at `siid 14 piid 4`
+  (`NOTIFICATION_PROP.STUCK_NOTIFICATION_ACTIVE`). The flag is sticky
+  for the lifetime of the stuck condition; consumers get an edge-
+  triggered event plus a `state.stuck` boolean for UI bindings. Payload
+  carries the current `errorCode`, `faults` snapshot, and `miotState`
+  so a downstream handler can disambiguate post-task tank prompts from
+  genuine multi-hour stuck events.
+- New `batteryLifecycle` event with debounced threshold crossings:
+  `low` (≤ 20% while not charging), `critical` (≤ 10% while not
+  charging), `depleted` (battery 0 OR device went offline while
+  battery was already critical — the closest signal we can give to
+  "robot ran out of charge mid-job"), and `recovered` (battery
+  climbed back above 25%). Re-arms after `recovered` so subsequent
+  drops fire again. The `depleted`-on-disconnect path covers the
+  exact incident class where the device strands itself, deep-
+  discharges, and recovers silently with no fault history retained.
+- New `state.faults: readonly number[]` — the **full set of currently-
+  latched fault codes**, parsed from the multi-value `FAULTS_STR`
+  mirror at `siid 4 piid 18`. The single-value `errorCode` (siid 2
+  piid 2) only ever holds one code; when several conditions are
+  latched at once (e.g. robot lifted AND clean-water tank empty) the
+  device packs them comma-separated into `FAULTS_STR`. Cross-
+  reference Tasshack/dreame-vacuum `device.py:1342-1372` on dev.
+- `taskLifecycle.aborted` payloads now carry the `faults` array
+  alongside the single `errorCode`, plus an optional `inferred`
+  discriminator:
+    - `"initial-state"` — fired when the subscription joins a device
+      that's already latched in an error state (closes the gap where
+      mid-incident subscribers never heard about the incident).
+    - `"mqtt-disconnect"` — fired with `reason: "disappeared"` when
+      the connection drops while a task was actively running.
+- New `Vacuum.refreshFromCloud()` — refreshes `state.battery` /
+  `state.miotState` / `state.online` from the cloud device-list HTTP
+  endpoint, which serves cached telemetry reliably even when
+  `getProperties` is 80001-spinning. Returns the parsed
+  `DreameCloudState` snapshot ( `latestStatus`, `battery`,
+  `videoActive`, `featureCode2`). The fallback path of choice when
+  the live MIoT channel is silent.
+- `DreameDevice` now surfaces `firmwareVersion`, `serialNumber`, and
+  `cloudState` as typed top-level fields (previously hidden inside
+  `device.raw`).
+- `state.stuck`, `state.dryingProgressMin`, `state.relocationStatusRaw`,
+  `state.activeMapId`, `state.savedMapIds` — first-class state fields
+  for signals we previously surfaced only at the property-catalogue
+  level. `activeMapId` is derived from the `_sync.update_vacuum_mapinfo`
+  push's per-map token (`[5,10]`-style for active, `[0]` for stored).
+- Expanded `MiotError` enum with the Tasshack/dreame-vacuum
+  `DreameVacuumErrorCode` codes most relevant to consumer alerting:
+  `BatteryLow` (20), `ChargeFault` (21), `BatteryPercentageAnomaly`
+  (22), `ChargeNoElectric` (28), `BatteryFault` (29),
+  `LowBatteryTurnOff` (75), `RobotStuck` (80), `RobotStuckRepeat` (81),
+  `RobotStuck2` (90), the `RobotStuckOnTables`/`Passage`/`Threshold`/
+  `LowLyingArea`/`Ramp`/`Obstacle`/`Pet`/`SlipperySurface`/`Carpet`
+  family (91-99), `RobotStuckOnCurtain` (200), `BinFull` (101),
+  `StationDisconnected` (117), `DustBagFull` (121). VERIFIED entries
+  unchanged; new entries flagged ASSUMED in the JSDoc.
+- `MiotError`, `TaskStatus`, `TaskPhase`, and `NOTIFICATION_PROP` are
+  now re-exported from the top-level `node-dreame` entry; previously
+  consumers had to import them from the deep `./miot-spec` path.
+
+### Changed
+
+- **Property rename:** `VACUUM_PROP.TASK_RESET_COUNTER` (siid 4 piid 64)
+  → `VACUUM_PROP.DRYING_PROGRESS`. Tasshack's `DRYING_PROGRESS` label
+  matches the observed behaviour (resets at end-of-task, ticks once
+  per minute through the dock's drying cycle) exactly. The new
+  `state.dryingProgressMin` surfaces it as minutes-elapsed.
+- **Property rename:** `VACUUM_PROP.ERROR_STR_MIRROR` (siid 4 piid 18)
+  → `VACUUM_PROP.FAULTS_STR`. The field is a comma-separated fault
+  list, not a single-value mirror; on r2532a we'd only observed it
+  carrying single codes (which still works), but the rename reflects
+  the actual multi-value semantics.
+
 ## [0.3.0] - 2026-05-12
 
 ### Added
