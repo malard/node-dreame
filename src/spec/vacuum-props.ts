@@ -22,10 +22,15 @@ export const VACUUM_PROP = {
    */
   STATE: { siid: 2, piid: 1 } as const,
   /**
-   * Error/fault code. See `MiotError` enum for the 6 catalogued values.
-   * VERIFIED on r2532a 2026-05-02: 0/1/18/68/74/114 all observed. Most codes
-   * auto-clear when the underlying cause is resolved (no CLEAR_WARNING needed).
-   * The string-typed mirror at `ERROR_STR_MIRROR` (piid 18) co-fires within ~1ms.
+   * Error/fault code. See `MiotError` enum for the 8 catalogued values
+   * verified on r2532a: 0/1/18/68/74/105/107/114. Most codes auto-clear when
+   * the underlying cause is resolved (no CLEAR_WARNING needed). The
+   * string-typed mirror at `ERROR_STR_MIRROR` (piid 18) co-fires within ~1ms.
+   *
+   * `TaskComplete = 68` is the benign end-of-task signal — filter it out of
+   * any "needs attention" UX. `WastewaterTankFull = 105` and
+   * `CleanWaterTankEmpty = 107` are the most user-actionable faults on the
+   * X50 (dock refill/empty prompts).
    */
   ERROR: { siid: 2, piid: 2 } as const,
   /**
