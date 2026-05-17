@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-17
+
 ### Added
 
 - New `stuck` and `unstuck` events on `Vacuum`, driven by the device's
