@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](./package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6.svg?logo=typescript&logoColor=white)](./tsconfig.json)
-[![Tested model](https://img.shields.io/badge/tested-Dreame%20X50%20Ultra%20Complete%20%28r2532a%29-orange.svg)](./docs/spec-discovery-methodology.md)
+[![Tested models](https://img.shields.io/badge/tested-X50%20Ultra%20Complete%20%28r2532a%29%20%2B%20X40%20Ultra%20Complete%20%28r2449a%29-orange.svg)](./docs/spec-discovery-methodology.md)
 [![Issues](https://img.shields.io/github/issues/malard/node-dreame.svg)](https://github.com/malard/node-dreame/issues)
 [![Last commit](https://img.shields.io/github/last-commit/malard/node-dreame.svg)](https://github.com/malard/node-dreame/commits/main)
 
@@ -202,7 +202,7 @@ viewport transform.
 
 ## Supported devices
 
-Developed against a **Dreame `r2532a`** (X50 Ultra Complete, EU region, firmware 4.3.9_2199). Other models may work — the auth and transport layer should be model-agnostic — but the property/action catalogue in `miot-spec.ts` is partly verified on r2532a and partly inherited from [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum) (older Dreames on Mi cloud).
+Developed against a **Dreame `r2532a`** (X50 Ultra Complete, EU region, firmware 4.3.9_2199). Also verified against **Dreame `r2449a`** (X40 Ultra Complete, EU region, firmware FU174072) on 2026-05-21 — same auth, transport, MQTT, and OSS-map paths; same `MiotState` / `MopWashTemp` / `CarpetHandlingMode` / `ObstacleCrossingMode` enum surfaces; `MOP_PADS_STATE` (siid 2 piid 6) decodes as the canonical `CleaningMode` enum mirror (low 2 bits of `CLEANING_MODE` at siid 4 piid 23 OR'd with the constant `0x1400` capability mask). Other models may work — the auth and transport layer is model-agnostic — but the property/action catalogue in `miot-spec.ts` is partly verified on r2532a/r2449a and partly inherited from [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum) (older Dreames on Mi cloud).
 
 ### Coverage status
 
@@ -234,20 +234,20 @@ If a behaviour you care about isn't VERIFIED, treat it as a guess. If you exerci
 - Cleaning-schedule string format (CleanGenius preset + Custom-global; Custom per-room is structural only — see [issue #1](https://github.com/malard/node-dreame/issues/1))
 - Scale Inhibitor consumable (`siid 31`) on top of brush/filter/sensor
 - `DreameDeviceOfflineError` distinguished from other API errors
-- 11 of ~36 `FEATURE_CONFIG_KEYS` confirmed by toggle (the rest documented by name only)
+- 13 of ~36 `FEATURE_CONFIG_KEYS` confirmed by toggle (the rest documented by name only)
 
 ### Known specifically-NOT-verified pieces
 
 - Actions `CHARGE`/dock, `START_AUTO_EMPTY`, `START_WASHING`, all `RESET_*` — wired with Tasshack's older-model siid:aiid values, but no live test
 - `SuctionLevel`, `WaterVolume`, `ChargingStatus`, `CleaningMode` enum behaviour during actual cleaning (settings reads work; downstream effects untested)
 - `TASK_STATUS` (siid 4 piid 1) — raw int only; values 1, 2, 3, 6, 12, 13, 14, 17, 18, 23 observed in different states without a clean mapping
-- `CleaningMode` (siid 4 piid 23) — known to be a packed bitfield on r2532a (raw 5120 in baseline); not decoded
+- ~~`CleaningMode` (siid 4 piid 23) — known to be a packed bitfield on r2532a (raw 5120 in baseline); not decoded~~ — **decoded 2026-05-21 on r2449a:** low 2 bits carry the `CleaningMode` enum (`value & 0x3`), `0x1400` mask is constant capability bits. The r2532a `5120 ↔ 5122` transitions decode as `Sweeping ↔ SweepAndMop` clean-mode toggles. Prefer writing `MOP_PADS_STATE` (siid 2 piid 6) over `CLEANING_MODE` directly — see the JSDoc in `vacuum-props.ts` for the bitfield trap to avoid.
 - Per-room schedule packed-int format ([issue #1](https://github.com/malard/node-dreame/issues/1))
 - AI obstacle bitfield (`siid 4 piid 22`) — partial decoding only; bits 1, 2, 4 verified, bits 0, 3, 5-8 unknown
 - `0xC249` middle bits of the Custom-mode global schedule int
 - The `siid 99 piid 98` compressed telemetry blob — payload format unknown
 - AI object-detection class catalog (we see bbox class id 160 repeatedly; other class IDs not observed)
-- Most of the `FEATURE_CONFIG_KEYS` (~25 still documented by name only)
+- Most of the `FEATURE_CONFIG_KEYS` (~23 still documented by name only)
 - Long-form cleaning-run behaviour through to completion — we've triggered short START/STOP cycles via the lib, but a full task end-to-end (with the resulting `taskComplete` event) has only been observed from app-initiated runs
 
 ### Cloud-only settings (no MQTT push to the device)

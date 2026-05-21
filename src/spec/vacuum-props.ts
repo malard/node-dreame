@@ -58,16 +58,26 @@ export const VACUUM_PROP = {
    */
   FAULTS_STR: { siid: 4, piid: 18 } as const,
   /**
-   * VERIFIED on r2532a 2026-05-02 — mop-pad availability/transition state.
-   * Observed values: `2` and `0`. Transitions are tightly synchronised with
-   * MiotState 17 (ReturnInstallMop) and 18 (ReturnRemoveMop) edges.
+   * VERIFIED on r2449a 2026-05-21 — mirror of the low 2 bits of
+   * `CLEANING_MODE` (siid 4 piid 23); holds the `CleaningMode` enum
+   * directly as `0..3` (Sweeping / Mopping / SweepAndMop / MopAfterSweep).
    *
-   * **Semantics NOT YET fully decoded.** The "available vs in-active-use"
-   * model fits some transitions but contradicts others (e.g. `0 → 2` was
-   * observed at the moment the device prepared to *drop* pads, which the
-   * "available = parked at dock" reading would predict the opposite of).
-   * Treat as raw int and correlate against `CLEANING_MODE` bit 1 — the bit
-   * tracks physical attachment more reliably.
+   * Verified on r2449a as the canonical write path for the clean-mode
+   * enum: writing the integer `0..3` here moves both `MOP_PADS_STATE`
+   * and `CLEANING_MODE` in lockstep (the device echoes the value into
+   * `CLEANING_MODE` OR'd with the `0x1400` capability mask — see
+   * `CLEANING_MODE` below). Writing directly to `CLEANING_MODE` without
+   * preserving the `0x1400` mask drops the capability bits and silently
+   * bricks the next clean; this property avoids that trap.
+   *
+   * Consistent with r2532a 2026-05-02 observations (`0 ↔ 2` synchronised
+   * with `MiotState 17 ReturnInstallMop` / `18 ReturnRemoveMop` edges):
+   * a `Sweeping → SweepAndMop` mode change is exactly what triggers the
+   * dock-side mop-install sequence, so the `0 → 2` edge "the moment the
+   * device prepared to drop pads" was the user-write into this field
+   * driving the install, not a separate "mop pads available" signal.
+   * The legacy `MOP_PADS_STATE` name is kept for back-compat; the field
+   * is the clean-mode mirror, not an independent pad-availability flag.
    */
   MOP_PADS_STATE: { siid: 2, piid: 6 } as const,
 
@@ -222,17 +232,32 @@ export const VACUUM_PROP = {
    */
   TASK_PHASE: { siid: 4, piid: 25 } as const,
   /**
-   * ASSUMED Tasshack types.py:594 — cleaning mode (sweep/mop/both). VERIFIED
-   * on r2532a — packed bitfield, the simple `CleaningMode` enum below does
-   * NOT apply.
+   * VERIFIED on r2449a 2026-05-21 — packed `(capability_mask | clean_mode)`.
    *
-   * **Decoded so far:**
-   *   bit 1 (=2) = mop pads currently attached to robot. Observed
-   *                `5120 ↔ 5122` transitions tracking install/remove.
+   *   `value & 0x3`     — the `CleaningMode` enum (0=Sweeping, 1=Mopping,
+   *                       2=SweepAndMop, 3=MopAfterSweep). Mirrors the
+   *                       canonical write path at `MOP_PADS_STATE`.
+   *   `value & 0x1400`  — always-on capability flags (bits 10 + 12).
+   *                       Constant across every observation on r2449a and
+   *                       on r2532a; suspected to encode "mop-attachment
+   *                       supported" / "auto-install supported" hardware
+   *                       capability claims rather than runtime state.
    *
-   * Other bits in `5120` (`0x1400` = bits 10 + 12) are constant across all
-   * observations — likely "always-on" capability flags for this hardware
-   * generation; their meanings remain undecoded.
+   * The `5120 ↔ 5122` transitions observed on r2532a decode as
+   * `(0x1400 | Sweeping) ↔ (0x1400 | SweepAndMop)` — i.e. the user
+   * toggling between Vac-only and Vac+Mop, which co-fires with the
+   * mop-install/remove dock sequence (`MiotState 17` / `18`). The earlier
+   * "bit 1 = mop pads physically attached" reading is consistent with
+   * the bit pattern but the better mental model is "low 2 bits = clean
+   * mode enum"; the mop-attachment correlation falls out of which clean
+   * modes need pads.
+   *
+   * **Prefer writing `MOP_PADS_STATE` over this field.** A direct write
+   * to `CLEANING_MODE` that drops the `0x1400` capability bits has been
+   * observed to silently brick the next clean on r2449a — the device
+   * 200-OKs the write but refuses subsequent `start()` until the bits
+   * are restored. `MOP_PADS_STATE` (siid 2 piid 6) exposes the same
+   * enum without the bitfield trap.
    */
   CLEANING_MODE: { siid: 4, piid: 23 } as const,
   /** VERIFIED on r2532a 2026-05-02 — Child Lock boolean (locks the on-device buttons). */

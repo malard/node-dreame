@@ -72,9 +72,21 @@ export const FEATURE_CONFIG_KEYS = {
   SuperWash: "SuperWash",
   /** ~ Human Follow camera mode (Tasshack: HUMAN_FOLLOW). */
   MonitorHumanFollow: "MonitorHumanFollow",
-  /** ~ Cleaning Route algorithm choice (Tasshack: CLEANING_ROUTE). See `DreameVacuumCleaningRoute` upstream for likely value space. */
+  /**
+   * ✓ Cleaning Route algorithm (Custom mode). VERIFIED on r2449a 2026-05-21
+   * by toggling each option in the Dreamehome app and observing the
+   * FEATURE_CONFIG_JSON echo. Values: `1=Standard, 2=Intensive, 3=Deep,
+   * 4=Quick` — same value space as the `ScheduleRoute` enum used in the
+   * Custom-mode schedule packed-int. Available routes depend on the
+   * active cleaning mode (Deep is only valid in Mop-only mode).
+   */
   CleanRoute: "CleanRoute",
-  /** ~ CleanGenius master toggle (Tasshack: CLEANGENIUS). Likely the on/off for the whole CleanGenius system; pairs with the in-schedule CleanGenius preset bits. */
+  /**
+   * ✓ CleanGenius master toggle. VERIFIED on r2449a 2026-05-21 — **3-state,
+   * not boolean**: `0=Off, 1=Normal, 2=Deep`. Pairs with the in-schedule
+   * CleanGenius preset bits. The third "Deep" state was not present in
+   * the original Tasshack mapping; see the `CleanGenius` enum.
+   */
   SmartHost: "SmartHost",
   /** ? Carpet-only cleaning mode. No Tasshack mapping. */
   CarpetOnlyClean: "CarpetOnlyClean",
