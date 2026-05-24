@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`VACUUM_PROP.MOP_PADS_STATE` renamed to `VACUUM_PROP.CLEAN_MODE_SETTING`.**
+  The old name described a hypothesis (mop-pad availability flag) that
+  the r2449a verification disproved — the field is the writable
+  `CleaningMode` enum surface, not a pad-availability signal. The
+  siid/piid (`2`/`6`) is unchanged. Callers using
+  `VACUUM_PROP.MOP_PADS_STATE` must update the property name.
+
 ### Added
 
 - **`dreame.vacuum.r2449a` (Dreame X40 Ultra Complete) entry in
@@ -44,18 +53,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pattern-compatible but the better mental model is "low 2 bits =
   clean-mode enum"; the mop-attachment correlation falls out of which
   modes need pads.
-- **`VACUUM_PROP.MOP_PADS_STATE` (`siid 2 piid 6`) JSDoc rewritten.**
+- **`VACUUM_PROP.CLEAN_MODE_SETTING` (`siid 2 piid 6`) JSDoc rewritten.**
   Verified on r2449a 2026-05-21 as the canonical write path for the
-  `CleaningMode` enum (mirrors the low 2 bits of `CLEANING_MODE`
-  without the `0x1400` capability mask). Writing directly to
-  `CLEANING_MODE` and dropping the `0x1400` bits silently bricks the
-  next clean on r2449a — `MOP_PADS_STATE` avoids the trap. The
-  legacy name is kept for back-compat; the field is the clean-mode
-  mirror, not an independent pad-availability flag.
+  `CleaningMode` enum (plain `0..3`, no `0x1400` capability mask).
+  Writing directly to `CLEANING_MODE` and dropping the `0x1400` bits
+  silently bricks the next clean on r2449a — `CLEAN_MODE_SETTING`
+  avoids the trap. The field is the clean-mode setting, not an
+  independent pad-availability flag; see the rename note above.
 - **`CleaningMode` enum promoted from `ASSUMED` to `VERIFIED`** on
   r2449a (and consistent with r2532a after bitfield decode). Applies
   to the low 2 bits of `CLEANING_MODE` and the full value of
-  `MOP_PADS_STATE`.
+  `CLEAN_MODE_SETTING`.
 - **`FEATURE_CONFIG_KEYS.CleanRoute` promoted from `~` to `✓`.**
   Verified on r2449a 2026-05-21 by toggling each option in the
   Dreamehome app. Values: `1=Standard, 2=Intensive, 3=Deep,

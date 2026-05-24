@@ -297,9 +297,10 @@ export enum WaterVolume {
 
 /**
  * VERIFIED on r2449a 2026-05-21 — packed into the **low 2 bits** of
- * `CLEANING_MODE` (siid 4 piid 23) and mirrored cleanly as plain `0..3`
- * on `MOP_PADS_STATE` (siid 2 piid 6). The full `CLEANING_MODE` value is
- * `(CleaningMode | 0x1400)`; mask with `& 0x3` to extract this enum.
+ * `CLEANING_MODE` (siid 4 piid 23) and exposed as plain `0..3` on the
+ * writable `CLEAN_MODE_SETTING` (siid 2 piid 6). The full `CLEANING_MODE`
+ * value is `(CleaningMode | 0x1400)`; mask with `& 0x3` to extract this
+ * enum.
  *
  * Consistent with r2532a 2026-05-02 observations after bitfield decode:
  * the `5120 ↔ 5122` transitions are `(0x1400 | Sweeping) ↔ (0x1400 |

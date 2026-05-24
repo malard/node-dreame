@@ -39,7 +39,7 @@ const PROBE_PROPS = [
   VACUUM_PROP.ERROR,
   VACUUM_PROP.FAULTS_STR,
   VACUUM_PROP.TASK_STATUS,
-  VACUUM_PROP.MOP_PADS_STATE,
+  VACUUM_PROP.CLEAN_MODE_SETTING,
 ];
 
 function emit(kind: string, data: unknown): void {
@@ -72,7 +72,7 @@ sub.on("error", (err) => emit("mqtt-error", { name: err.name, message: err.messa
 emit("phase", `waiting ${PRE_GET_WAIT_MS}ms — capturing spontaneous pushes`);
 await new Promise((r) => setTimeout(r, PRE_GET_WAIT_MS));
 
-emit("phase", `firing getProperties [STATE, ERROR, FAULTS_STR, TASK_STATUS, MOP_PADS_STATE]`);
+emit("phase", `firing getProperties [STATE, ERROR, FAULTS_STR, TASK_STATUS, CLEAN_MODE_SETTING]`);
 try {
   const results = await dreame.getProperties(device.did, PROBE_PROPS);
   emit("get-properties-acked", results);

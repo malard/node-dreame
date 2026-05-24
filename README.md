@@ -202,7 +202,7 @@ viewport transform.
 
 ## Supported devices
 
-Developed against a **Dreame `r2532a`** (X50 Ultra Complete, EU region, firmware 4.3.9_2199). Also verified against **Dreame `r2449a`** (X40 Ultra Complete, EU region, firmware FU174072) on 2026-05-21 — same auth, transport, MQTT, and OSS-map paths; same `MiotState` / `MopWashTemp` / `CarpetHandlingMode` / `ObstacleCrossingMode` enum surfaces; `MOP_PADS_STATE` (siid 2 piid 6) decodes as the canonical `CleaningMode` enum mirror (low 2 bits of `CLEANING_MODE` at siid 4 piid 23 OR'd with the constant `0x1400` capability mask). Other models may work — the auth and transport layer is model-agnostic — but the property/action catalogue in `miot-spec.ts` is partly verified on r2532a/r2449a and partly inherited from [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum) (older Dreames on Mi cloud).
+Developed against a **Dreame `r2532a`** (X50 Ultra Complete, EU region, firmware 4.3.9_2199). Also verified against **Dreame `r2449a`** (X40 Ultra Complete, EU region, firmware FU174072) on 2026-05-21 — same auth, transport, MQTT, and OSS-map paths; same `MiotState` / `MopWashTemp` / `CarpetHandlingMode` / `ObstacleCrossingMode` enum surfaces; `CLEAN_MODE_SETTING` (siid 2 piid 6) is the writable `CleaningMode` enum surface, with `CLEANING_MODE` (siid 4 piid 23) being the same enum OR'd with a constant `0x1400` capability mask. Other models may work — the auth and transport layer is model-agnostic — but the property/action catalogue in `miot-spec.ts` is partly verified on r2532a/r2449a and partly inherited from [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum) (older Dreames on Mi cloud).
 
 ### Coverage status
 
@@ -241,7 +241,7 @@ If a behaviour you care about isn't VERIFIED, treat it as a guess. If you exerci
 - Actions `CHARGE`/dock, `START_AUTO_EMPTY`, `START_WASHING`, all `RESET_*` — wired with Tasshack's older-model siid:aiid values, but no live test
 - `SuctionLevel`, `WaterVolume`, `ChargingStatus`, `CleaningMode` enum behaviour during actual cleaning (settings reads work; downstream effects untested)
 - `TASK_STATUS` (siid 4 piid 1) — raw int only; values 1, 2, 3, 6, 12, 13, 14, 17, 18, 23 observed in different states without a clean mapping
-- ~~`CleaningMode` (siid 4 piid 23) — known to be a packed bitfield on r2532a (raw 5120 in baseline); not decoded~~ — **decoded 2026-05-21 on r2449a:** low 2 bits carry the `CleaningMode` enum (`value & 0x3`), `0x1400` mask is constant capability bits. The r2532a `5120 ↔ 5122` transitions decode as `Sweeping ↔ SweepAndMop` clean-mode toggles. Prefer writing `MOP_PADS_STATE` (siid 2 piid 6) over `CLEANING_MODE` directly — see the JSDoc in `vacuum-props.ts` for the bitfield trap to avoid.
+- ~~`CleaningMode` (siid 4 piid 23) — known to be a packed bitfield on r2532a (raw 5120 in baseline); not decoded~~ — **decoded 2026-05-21 on r2449a:** low 2 bits carry the `CleaningMode` enum (`value & 0x3`), `0x1400` mask is constant capability bits. The r2532a `5120 ↔ 5122` transitions decode as `Sweeping ↔ SweepAndMop` clean-mode toggles. Prefer writing `CLEAN_MODE_SETTING` (siid 2 piid 6) over `CLEANING_MODE` directly — see the JSDoc in `vacuum-props.ts` for the bitfield trap to avoid.
 - Per-room schedule packed-int format ([issue #1](https://github.com/malard/node-dreame/issues/1))
 - AI obstacle bitfield (`siid 4 piid 22`) — partial decoding only; bits 1, 2, 4 verified, bits 0, 3, 5-8 unknown
 - `0xC249` middle bits of the Custom-mode global schedule int

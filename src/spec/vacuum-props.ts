@@ -58,17 +58,17 @@ export const VACUUM_PROP = {
    */
   FAULTS_STR: { siid: 4, piid: 18 } as const,
   /**
-   * VERIFIED on r2449a 2026-05-21 — mirror of the low 2 bits of
-   * `CLEANING_MODE` (siid 4 piid 23); holds the `CleaningMode` enum
-   * directly as `0..3` (Sweeping / Mopping / SweepAndMop / MopAfterSweep).
+   * VERIFIED on r2449a 2026-05-21 — writable `CleaningMode` enum at
+   * `siid 2 piid 6`. Holds the enum directly as plain `0..3` (Sweeping
+   * / Mopping / SweepAndMop / MopAfterSweep), with no capability-bit
+   * mask. The canonical write path for clean-mode changes.
    *
-   * Verified on r2449a as the canonical write path for the clean-mode
-   * enum: writing the integer `0..3` here moves both `MOP_PADS_STATE`
-   * and `CLEANING_MODE` in lockstep (the device echoes the value into
-   * `CLEANING_MODE` OR'd with the `0x1400` capability mask — see
-   * `CLEANING_MODE` below). Writing directly to `CLEANING_MODE` without
-   * preserving the `0x1400` mask drops the capability bits and silently
-   * bricks the next clean; this property avoids that trap.
+   * Writing `0..3` here moves both this property and `CLEANING_MODE`
+   * (siid 4 piid 23) in lockstep — the device echoes the value into
+   * `CLEANING_MODE` OR'd with the `0x1400` capability mask. Writing
+   * directly to `CLEANING_MODE` without preserving the `0x1400` mask
+   * drops the capability bits and silently bricks the next clean;
+   * prefer this property to avoid the trap.
    *
    * Consistent with r2532a 2026-05-02 observations (`0 ↔ 2` synchronised
    * with `MiotState 17 ReturnInstallMop` / `18 ReturnRemoveMop` edges):
@@ -76,10 +76,12 @@ export const VACUUM_PROP = {
    * dock-side mop-install sequence, so the `0 → 2` edge "the moment the
    * device prepared to drop pads" was the user-write into this field
    * driving the install, not a separate "mop pads available" signal.
-   * The legacy `MOP_PADS_STATE` name is kept for back-compat; the field
-   * is the clean-mode mirror, not an independent pad-availability flag.
+   *
+   * Previously named `MOP_PADS_STATE` (pre-v0.5); the rename reflects
+   * the actual semantics — this is the clean-mode setting, not an
+   * independent mop-pad availability flag.
    */
-  MOP_PADS_STATE: { siid: 2, piid: 6 } as const,
+  CLEAN_MODE_SETTING: { siid: 2, piid: 6 } as const,
 
   /**
    * VERIFIED on r2532a 2026-05-02 — Dreame "task status" enum. See `TaskStatus`.
@@ -236,7 +238,7 @@ export const VACUUM_PROP = {
    *
    *   `value & 0x3`     — the `CleaningMode` enum (0=Sweeping, 1=Mopping,
    *                       2=SweepAndMop, 3=MopAfterSweep). Mirrors the
-   *                       canonical write path at `MOP_PADS_STATE`.
+   *                       canonical write path at `CLEAN_MODE_SETTING`.
    *   `value & 0x1400`  — always-on capability flags (bits 10 + 12).
    *                       Constant across every observation on r2449a and
    *                       on r2532a; suspected to encode "mop-attachment
@@ -252,12 +254,12 @@ export const VACUUM_PROP = {
    * mode enum"; the mop-attachment correlation falls out of which clean
    * modes need pads.
    *
-   * **Prefer writing `MOP_PADS_STATE` over this field.** A direct write
-   * to `CLEANING_MODE` that drops the `0x1400` capability bits has been
-   * observed to silently brick the next clean on r2449a — the device
-   * 200-OKs the write but refuses subsequent `start()` until the bits
-   * are restored. `MOP_PADS_STATE` (siid 2 piid 6) exposes the same
-   * enum without the bitfield trap.
+   * **Prefer writing `CLEAN_MODE_SETTING` over this field.** A direct
+   * write to `CLEANING_MODE` that drops the `0x1400` capability bits
+   * has been observed to silently brick the next clean on r2449a — the
+   * device 200-OKs the write but refuses subsequent `start()` until the
+   * bits are restored. `CLEAN_MODE_SETTING` (siid 2 piid 6) exposes the
+   * same enum without the bitfield trap.
    */
   CLEANING_MODE: { siid: 4, piid: 23 } as const,
   /** VERIFIED on r2532a 2026-05-02 — Child Lock boolean (locks the on-device buttons). */
