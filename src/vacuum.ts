@@ -403,7 +403,9 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
    * endpoint is **separately reachable** from the MIoT property
    * channel — on an idle device that's silent on MQTT and 80001-ing
    * on `getProperties`, this is often the only HTTP path that still
-   * responds with usable state.
+   * responds with usable state. Also confirmed on r2449a 2026-05-21:
+   * `getProperties` 80001-spins reliably while this endpoint returns
+   * fresh `latestStatus` / `battery`.
    *
    * Use cases:
    *  - You want to know whether the device is online / charged / what

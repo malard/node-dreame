@@ -169,6 +169,79 @@ function deepFreeze<T>(obj: T): T {
  * corrupt them for every subsequent caller.
  */
 export const MODEL_CAPABILITIES: Readonly<Record<string, DeviceCapabilities>> = {
+  /**
+   * Dreame X40 Ultra Complete — verified against r2449a hardware
+   * (firmware FU174072, EU region) on 2026-05-21.
+   *
+   * Capability flags mirror r2532a (X50 Ultra Complete) because the X40
+   * Ultra Complete ships with the same dock-side feature set: heated
+   * mop wash, mop drying, hair compression, detergent reservoir,
+   * obstacle-crossing chassis. Differences vs r2532a are below the
+   * level of the `DeviceCapabilities` schema (suction wattage, mop
+   * arm type, mast presence) and don't affect any of the boolean or
+   * supported-enum flags here.
+   *
+   * Suction / water / carpet / mop-wash / obstacle-crossing /
+   * mop-dry / auto-empty enums are all hardware-supported and
+   * accepted via the Dreamehome app on r2449a.
+   */
+  "dreame.vacuum.r2449a": {
+    model: "dreame.vacuum.r2449a",
+    verified: true,
+    canMop: true,
+    canAutoInstallMop: true,
+    hasSideBrush: true,
+    hasCamera: true,
+    hasCarpetSensor: true,
+    hasAiObstacleDetection: true,
+    canAutoEmpty: true,
+    canMopWash: true,
+    canMopDry: true,
+    canHeatMopWater: true,
+    hasDetergentReservoir: true,
+    canCleanPerRoom: true,
+    supportsVirtualWalls: true,
+    supportsNoGoZones: true,
+    hasChildLock: true,
+    supportsMultiFloor: true,
+    supportedSuctionLevels: [
+      SuctionLevel.Quiet,
+      SuctionLevel.Standard,
+      SuctionLevel.Intense,
+      SuctionLevel.Max,
+    ],
+    supportedWaterVolumes: [WaterVolume.Low, WaterVolume.Medium, WaterVolume.High],
+    supportedCarpetHandlingModes: [
+      CarpetHandlingMode.Avoid,
+      CarpetHandlingMode.VacuumMopLift,
+      CarpetHandlingMode.VacuumRemoveMop,
+      CarpetHandlingMode.Ignore,
+      CarpetHandlingMode.Crossing,
+    ],
+    supportedObstacleCrossingModes: [
+      ObstacleCrossingMode.HurdleStyle,
+      ObstacleCrossingMode.SynchronisedDualLeg,
+    ],
+    supportedMopWashTemps: [
+      MopWashTemp.Normal,
+      MopWashTemp.Mild,
+      MopWashTemp.Warm,
+      MopWashTemp.High,
+    ],
+    supportedMopWashWaterLevels: [
+      MopWashWaterLevel.WaterSaving,
+      MopWashWaterLevel.Standard,
+      MopWashWaterLevel.Deep,
+    ],
+    supportedMopDryModes: [MopDryMode.Standard, MopDryMode.Mute],
+    supportedAutoEmptyFrequencies: [
+      AutoEmptyFrequency.Off,
+      AutoEmptyFrequency.Standard,
+      AutoEmptyFrequency.HighFrequency,
+      AutoEmptyFrequency.LowFrequency,
+    ],
+  },
+
   /** Dreame X50 Ultra Complete — verified against firmware 4.3.9_2199 (2026-05-02). */
   "dreame.vacuum.r2532a": {
     model: "dreame.vacuum.r2532a",

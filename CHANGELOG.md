@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dreame.vacuum.r2449a` (Dreame X40 Ultra Complete) entry in
+  `MODEL_CAPABILITIES`.** Same dock-side feature set as r2532a (heated
+  mop wash, mop drying, hair compression, detergent reservoir,
+  obstacle-crossing chassis), `verified: true`. Verified against
+  firmware FU174072 (EU region) on 2026-05-21 — auth, transport, MQTT,
+  OSS map fetch, and the catalogue subset used by the sobreda
+  integration all work unchanged against the X40.
+- **`DOCK_PROP.CLEAN_GENIUS_SUB_MODE` at `siid 28 piid 5`.** Selects
+  the CleanGenius sub-mode (Vac + Mop vs Mop after Vac). Undocumented
+  in Tasshack/dreame-vacuum's enum. VERIFIED on r2449a 2026-05-21.
+- **`CleanGenius` enum (`Off=0`, `Normal=1`, `Deep=2`).** Value space
+  of `FEATURE_CONFIG_KEYS.SmartHost`. The CleanGenius master is
+  **3-state, not boolean** — the third state ("Deep Cleaning"
+  CleanGenius variant) was not present in the original Tasshack
+  mapping.
+- **`CleanGeniusSubMode` enum (`VacAndMop=2`, `MopAfterVac=3`).**
+  Value space of `DOCK_PROP.CLEAN_GENIUS_SUB_MODE`. CleanGenius does
+  NOT expose Vac-only or Mop-only sub-modes — the enum is
+  intentionally a 2-element subset of `CleaningMode`.
+
+### Changed
+
+- **`VACUUM_PROP.CLEANING_MODE` (`siid 4 piid 23`) bitfield decoded.**
+  The "known to be a packed bitfield on r2532a, not decoded" entry is
+  now fully decoded: `value & 0x3` is the `CleaningMode` enum
+  (`Sweeping` / `Mopping` / `SweepAndMop` / `MopAfterSweep`); `value
+  & 0x1400` is the always-on capability mask (bits 10 + 12, constant
+  on every observation across r2532a and r2449a). The r2532a `5120 ↔
+  5122` transitions decode as `Sweeping ↔ SweepAndMop` clean-mode
+  toggles — i.e. the user (or app) switching between Vac-only and Vac
+  + Mop, which co-fires with the dock's mop-install / remove sequence.
+  The earlier "bit 1 = mop pads physically attached" reading is bit-
+  pattern-compatible but the better mental model is "low 2 bits =
+  clean-mode enum"; the mop-attachment correlation falls out of which
+  modes need pads.
+- **`VACUUM_PROP.MOP_PADS_STATE` (`siid 2 piid 6`) JSDoc rewritten.**
+  Verified on r2449a 2026-05-21 as the canonical write path for the
+  `CleaningMode` enum (mirrors the low 2 bits of `CLEANING_MODE`
+  without the `0x1400` capability mask). Writing directly to
+  `CLEANING_MODE` and dropping the `0x1400` bits silently bricks the
+  next clean on r2449a — `MOP_PADS_STATE` avoids the trap. The
+  legacy name is kept for back-compat; the field is the clean-mode
+  mirror, not an independent pad-availability flag.
+- **`CleaningMode` enum promoted from `ASSUMED` to `VERIFIED`** on
+  r2449a (and consistent with r2532a after bitfield decode). Applies
+  to the low 2 bits of `CLEANING_MODE` and the full value of
+  `MOP_PADS_STATE`.
+- **`FEATURE_CONFIG_KEYS.CleanRoute` promoted from `~` to `✓`.**
+  Verified on r2449a 2026-05-21 by toggling each option in the
+  Dreamehome app. Values: `1=Standard, 2=Intensive, 3=Deep,
+  4=Quick` — same value space as the existing `ScheduleRoute` enum
+  used in the Custom-mode schedule packed-int.
+- **`FEATURE_CONFIG_KEYS.SmartHost` promoted from `~` to `✓`.**
+  Verified on r2449a 2026-05-21. **3-state, not boolean** — values
+  `0=Off, 1=Normal, 2=Deep`. Use the new `CleanGenius` enum.
+- **README "Tested model" badge** updated to list both r2532a (X50
+  Ultra Complete) and r2449a (X40 Ultra Complete). README "Supported
+  devices" section explains what's shared between the two models.
+
 ## [0.4.1] - 2026-05-17
 
 ### Added

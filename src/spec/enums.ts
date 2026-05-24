@@ -296,16 +296,47 @@ export enum WaterVolume {
 }
 
 /**
- * ASSUMED Tasshack — siid 4 piid 23 enum.
- * **NOT applicable to r2532a as-is**: we observed value `5120` on r2532a,
- * way outside this 0-3 range — almost certainly a packed bitfield in the
- * X50 generation. Surface the raw int until decoded.
+ * VERIFIED on r2449a 2026-05-21 — packed into the **low 2 bits** of
+ * `CLEANING_MODE` (siid 4 piid 23) and mirrored cleanly as plain `0..3`
+ * on `MOP_PADS_STATE` (siid 2 piid 6). The full `CLEANING_MODE` value is
+ * `(CleaningMode | 0x1400)`; mask with `& 0x3` to extract this enum.
+ *
+ * Consistent with r2532a 2026-05-02 observations after bitfield decode:
+ * the `5120 ↔ 5122` transitions are `(0x1400 | Sweeping) ↔ (0x1400 |
+ * SweepAndMop)`. See `VACUUM_PROP.CLEANING_MODE` for the trap to avoid
+ * when writing the raw bitfield directly.
  */
 export enum CleaningMode {
   Sweeping = 0,
   Mopping = 1,
   SweepAndMop = 2,
   MopAfterSweep = 3,
+}
+
+/**
+ * VERIFIED on r2449a 2026-05-21 — `FEATURE_CONFIG_KEYS.SmartHost` value
+ * space. The CleanGenius master toggle is **3-state, not boolean**: in
+ * addition to off (`0`) and the standard CleanGenius mode (`1`), there's
+ * a "Deep Cleaning" CleanGenius variant (`2`). Matches the Dreamehome
+ * app's three-tab CleanGenius UI on the X40 Ultra.
+ */
+export enum CleanGenius {
+  Off = 0,
+  Normal = 1,
+  Deep = 2,
+}
+
+/**
+ * VERIFIED on r2449a 2026-05-21 — `DOCK_PROP.CLEAN_GENIUS_SUB_MODE` value
+ * space (siid 28 piid 5). Selects the sub-mode within CleanGenius — Vac
+ * + Mop (`2`) or Mop after Vac (`3`). CleanGenius does NOT expose Vac-
+ * only or Mop-only sub-modes (mirrors the Dreamehome app's UI), so the
+ * value space is intentionally a 2-element subset of `CleaningMode`'s
+ * `SweepAndMop` and `MopAfterSweep` members.
+ */
+export enum CleanGeniusSubMode {
+  VacAndMop = 2,
+  MopAfterVac = 3,
 }
 
 // ─── Dock setting enums (all VERIFIED on r2532a 2026-05-02) ───────────

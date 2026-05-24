@@ -26,6 +26,14 @@ export const DOCK_PROP = {
    */
   HOT_WATER_STATUS: { siid: 27, piid: 15 } as const,
   /**
+   * VERIFIED on r2449a 2026-05-21 — CleanGenius sub-mode enum. Selects
+   * the sub-mode applied while CleanGenius is enabled (`FEATURE_CONFIG_
+   * KEYS.SmartHost` != 0). Values: `2 = Vac + Mop`, `3 = Mop after Vac`.
+   * CleanGenius does NOT expose Vac-only or Mop-only sub-modes (mirrors
+   * the Dreamehome app's UI). Use the `CleanGeniusSubMode` enum.
+   */
+  CLEAN_GENIUS_SUB_MODE: { siid: 28, piid: 5 } as const,
+  /**
    * VERIFIED on r2532a — Mop-Washing Water Temperature enum (4 values).
    *   0 = Normal (no heating)
    *   1 = Mild
