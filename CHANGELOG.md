@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`CleaningMode` value mapping corrected on r2449a** — `Sweeping` and
+  `SweepAndMop` values were inverted in v0.4.1 / v0.4.2. The previous
+  mapping (`Sweeping = 0`, `SweepAndMop = 2`) was round-trip-verified
+  (write `N` → echo `N`) but the named-mode ↔ value pairing was not
+  established against the Dreamehome app. A 2026-05-25 observation
+  probe on r2449a (tap each sub-mode in the app with marker labels
+  typed BEFORE the tap, capture the MQTT echo) produced the correct
+  mapping:
+    - `SweepAndMop = 0`  (was `2`)
+    - `Mopping = 1`      (unchanged)
+    - `Sweeping = 2`     (was `0`)
+    - `MopAfterSweep = 3` (unchanged)
+  Behavioural corroboration: with the old mapping, writing `0` for
+  "Sweeping" caused the dock to attach the mop pad (because the device
+  actually entered `SweepAndMop`).
+
+  **r2532a — needs re-verification.** Prior r2532a notes that paired
+  `5120 ↔ 5122` transitions with the mop-install / remove dock sequence
+  were named under the inverted mapping. The physical co-firing with
+  the dock sequence is unchanged; the *direction* (`Sweeping →
+  SweepAndMop` vs the reverse) depends on whether r2532a uses the
+  same value mapping as r2449a. Affected JSDocs on `CLEAN_MODE_SETTING`
+  and `CLEANING_MODE` now carry a "needs re-verification on r2532a"
+  note instead of the previous named-mode direction claim.
+
+### Added
+
+- **`DOCK_PROP.WATER_VOLUME_FINE` at `siid 28 piid 1`.** Fine-grained
+  per-job mop-water volume; integer slider `1..32`. The axis the
+  Dreamehome app surfaces in the per-mode water controls — the coarse
+  `VACUUM_PROP.WATER_VOLUME` (siid 4 piid 5) 3-step `Low/Medium/High`
+  enum is the legacy axis; new code should write the fine field.
+  VERIFIED on r2449a 2026-05-25 by dragging the app slider through
+  `1, 8, 16, 32` and observing the MQTT echo. Not yet observed on
+  r2532a.
+
+### Changed
+
+- **`FEATURE_CONFIG_KEYS.SuctionMax` promoted from `~` to `✓`.**
+  VERIFIED on r2449a 2026-05-25 — boolean (`0 = off`, `1 = on`),
+  writeable in both `Sweeping` and `MopAfterSweep` sub-modes (the two
+  sub-modes the Dreamehome app surfaces the toggle in — any mode with
+  a pure-vacuum phase). Tasshack name: `MAX_SUCTION_POWER`.
+
 ## [0.4.2] - 2026-05-24
 
 ### Breaking

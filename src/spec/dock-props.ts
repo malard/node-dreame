@@ -34,6 +34,21 @@ export const DOCK_PROP = {
    */
   CLEAN_GENIUS_SUB_MODE: { siid: 28, piid: 5 } as const,
   /**
+   * VERIFIED on r2449a 2026-05-25 — fine-grained per-job mop-water
+   * volume. Integer slider, range `1..32`. This is the axis the
+   * Dreamehome app surfaces in the per-mode water controls — the
+   * coarse `VACUUM_PROP.WATER_VOLUME` (siid 4 piid 5) 3-step
+   * `Low/Medium/High` enum is a legacy field; new code should write
+   * here. Observation probe (drag the app slider through several
+   * values) echoed back cleanly: `1`, `8`, `16`, `32`. No `WaterVolume`
+   * enum is defined — values are written as bare integers.
+   *
+   * **r2532a — not yet observed.** Likely shared given that all other
+   * dock-cluster properties on `siid 28` are present on both models,
+   * but the slider hasn't been confirmed live on r2532a.
+   */
+  WATER_VOLUME_FINE: { siid: 28, piid: 1 } as const,
+  /**
    * VERIFIED on r2532a — Mop-Washing Water Temperature enum (4 values).
    *   0 = Normal (no heating)
    *   1 = Mild

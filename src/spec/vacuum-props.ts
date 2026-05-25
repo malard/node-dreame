@@ -58,10 +58,11 @@ export const VACUUM_PROP = {
    */
   FAULTS_STR: { siid: 4, piid: 18 } as const,
   /**
-   * VERIFIED on r2449a 2026-05-21 — writable `CleaningMode` enum at
-   * `siid 2 piid 6`. Holds the enum directly as plain `0..3` (Sweeping
-   * / Mopping / SweepAndMop / MopAfterSweep), with no capability-bit
-   * mask. The canonical write path for clean-mode changes.
+   * VERIFIED on r2449a 2026-05-25 — writable `CleaningMode` enum at
+   * `siid 2 piid 6`. Holds the enum directly as plain `0..3`
+   * (SweepAndMop / Mopping / Sweeping / MopAfterSweep, in value order),
+   * with no capability-bit mask. The canonical write path for
+   * clean-mode changes.
    *
    * Writing `0..3` here moves both this property and `CLEANING_MODE`
    * (siid 4 piid 23) in lockstep — the device echoes the value into
@@ -70,12 +71,19 @@ export const VACUUM_PROP = {
    * drops the capability bits and silently bricks the next clean;
    * prefer this property to avoid the trap.
    *
-   * Consistent with r2532a 2026-05-02 observations (`0 ↔ 2` synchronised
-   * with `MiotState 17 ReturnInstallMop` / `18 ReturnRemoveMop` edges):
-   * a `Sweeping → SweepAndMop` mode change is exactly what triggers the
-   * dock-side mop-install sequence, so the `0 → 2` edge "the moment the
-   * device prepared to drop pads" was the user-write into this field
-   * driving the install, not a separate "mop pads available" signal.
+   * **r2532a — needs re-verification.** Earlier 2026-05-02 notes on
+   * this property paired the `0 ↔ 2` echoes with the
+   * `MiotState 17 ReturnInstallMop` / `18 ReturnRemoveMop` edges and
+   * read them as `Sweeping → SweepAndMop` (mop-install) transitions.
+   * The r2449a value swap (`0 = SweepAndMop`, `2 = Sweeping` — see the
+   * `CleaningMode` enum) inverts the named direction of that
+   * transition: under the corrected mapping, `0 → 2` would be
+   * `SweepAndMop → Sweeping` (mop-REMOVE), not install. The physical
+   * co-firing with the dock sequence still holds, but the direction
+   * depends on whether r2532a uses the same value mapping as r2449a.
+   * Re-verify on r2532a by tapping each sub-mode in the Dreamehome app
+   * (label-before-tap protocol) and reading back the echo before
+   * trusting the named-mode direction in r2532a notes.
    *
    * Previously named `MOP_PADS_STATE` (pre-v0.5); the rename reflects
    * the actual semantics — this is the clean-mode setting, not an
@@ -234,25 +242,32 @@ export const VACUUM_PROP = {
    */
   TASK_PHASE: { siid: 4, piid: 25 } as const,
   /**
-   * VERIFIED on r2449a 2026-05-21 — packed `(capability_mask | clean_mode)`.
+   * VERIFIED on r2449a 2026-05-25 — packed `(capability_mask | clean_mode)`.
    *
-   *   `value & 0x3`     — the `CleaningMode` enum (0=Sweeping, 1=Mopping,
-   *                       2=SweepAndMop, 3=MopAfterSweep). Mirrors the
-   *                       canonical write path at `CLEAN_MODE_SETTING`.
+   *   `value & 0x3`     — the `CleaningMode` enum (0=SweepAndMop,
+   *                       1=Mopping, 2=Sweeping, 3=MopAfterSweep).
+   *                       Mirrors the canonical write path at
+   *                       `CLEAN_MODE_SETTING`.
    *   `value & 0x1400`  — always-on capability flags (bits 10 + 12).
    *                       Constant across every observation on r2449a and
    *                       on r2532a; suspected to encode "mop-attachment
    *                       supported" / "auto-install supported" hardware
    *                       capability claims rather than runtime state.
    *
-   * The `5120 ↔ 5122` transitions observed on r2532a decode as
-   * `(0x1400 | Sweeping) ↔ (0x1400 | SweepAndMop)` — i.e. the user
-   * toggling between Vac-only and Vac+Mop, which co-fires with the
-   * mop-install/remove dock sequence (`MiotState 17` / `18`). The earlier
-   * "bit 1 = mop pads physically attached" reading is consistent with
-   * the bit pattern but the better mental model is "low 2 bits = clean
-   * mode enum"; the mop-attachment correlation falls out of which clean
-   * modes need pads.
+   * The r2449a observation probe captured all four values cleanly:
+   * `5120 = (0x1400 | SweepAndMop)`, `5121 = (0x1400 | Mopping)`,
+   * `5122 = (0x1400 | Sweeping)`, `5123 = (0x1400 | MopAfterSweep)`.
+   *
+   * **r2532a — needs re-verification.** The 2026-05-02 r2532a notes
+   * paired `5120 ↔ 5122` transitions with the mop-install / remove
+   * dock sequence (`MiotState 17` / `18`) and read them as `Sweeping ↔
+   * SweepAndMop` — but that pre-dates the r2449a value swap and was
+   * named under the inverted mapping. The physical correlation
+   * (clean-mode change co-fires with the dock sequence) is unchanged,
+   * but the *named direction* depends on whether r2532a uses the same
+   * value mapping as r2449a. Re-verify on r2532a before trusting the
+   * named-mode direction. The "low 2 bits = clean-mode enum" mental
+   * model itself remains correct on both models.
    *
    * **Prefer writing `CLEAN_MODE_SETTING` over this field.** A direct
    * write to `CLEANING_MODE` that drops the `0x1400` capability bits

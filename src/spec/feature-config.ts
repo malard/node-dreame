@@ -112,7 +112,14 @@ export const FEATURE_CONFIG_KEYS = {
   ExtrFreq: "ExtrFreq",
   /** ~ Smart Drying mode (Tasshack: SMART_DRYING). */
   SmartDrying: "SmartDrying",
-  /** ~ Max Suction Power toggle (Tasshack: MAX_SUCTION_POWER). */
+  /**
+   * ✓ Max Suction Power toggle. VERIFIED on r2449a 2026-05-25 by
+   * toggling each direction in the Dreamehome app and observing
+   * `FEATURE_CONFIG_JSON` deltas. Boolean (`0 = off`, `1 = on`); writes
+   * accepted in both `Sweeping` and `MopAfterSweep` sub-modes (the two
+   * sub-modes the app surfaces the toggle in — any mode with a pure-
+   * vacuum phase). Tasshack name: `MAX_SUCTION_POWER`.
+   */
   SuctionMax: "SuctionMax",
   /** ~ Collision Avoidance (Tasshack: COLLISION_AVOIDANCE). Softer obstacle approach. */
   LessColl: "LessColl",
