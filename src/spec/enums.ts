@@ -296,21 +296,38 @@ export enum WaterVolume {
 }
 
 /**
- * VERIFIED on r2449a 2026-05-21 — packed into the **low 2 bits** of
+ * VERIFIED on r2449a 2026-05-25 — packed into the **low 2 bits** of
  * `CLEANING_MODE` (siid 4 piid 23) and exposed as plain `0..3` on the
  * writable `CLEAN_MODE_SETTING` (siid 2 piid 6). The full `CLEANING_MODE`
  * value is `(CleaningMode | 0x1400)`; mask with `& 0x3` to extract this
  * enum.
  *
- * Consistent with r2532a 2026-05-02 observations after bitfield decode:
- * the `5120 ↔ 5122` transitions are `(0x1400 | Sweeping) ↔ (0x1400 |
- * SweepAndMop)`. See `VACUUM_PROP.CLEANING_MODE` for the trap to avoid
- * when writing the raw bitfield directly.
+ * **Correction (vs v0.4.1 / v0.4.2):** the prior values `Sweeping = 0`
+ * and `SweepAndMop = 2` were inverted. The v0.4.1 PR verified
+ * round-trippability (write N → echo N) but not the named-mode ↔ value
+ * pairing. A 2026-05-25 observation probe on r2449a (tap each sub-mode
+ * in the Dreamehome app, label the marker BEFORE the tap, capture the
+ * MQTT echo) produced:
+ *   SweepAndMop    → `2.6 = 0`, `4.23 = 5120` (`0x1400 | 0`)
+ *   Mopping        → `2.6 = 1`, `4.23 = 5121` (`0x1400 | 1`)
+ *   Sweeping       → `2.6 = 2`, `4.23 = 5122` (`0x1400 | 2`)
+ *   MopAfterSweep  → `2.6 = 3`, `4.23 = 5123` (`0x1400 | 3`)
+ * Behavioural corroboration: with the old map, writing `0` for "Sweeping"
+ * caused the dock to attach the mop pad (because the device actually
+ * entered `SweepAndMop`).
+ *
+ * The r2532a `5120 ↔ 5122` transition analysis previously here is now
+ * known to be ambiguous on naming and has been moved into a "needs
+ * re-verification on r2532a" note on `VACUUM_PROP.CLEANING_MODE` — the
+ * physical co-firing with the mop-install/remove dock sequence still
+ * holds, but the *direction* (`Sweeping → SweepAndMop` vs the reverse)
+ * now depends on whether the r2532a model uses the same value mapping
+ * as r2449a. Until re-verified, only the r2449a mapping is normative.
  */
 export enum CleaningMode {
-  Sweeping = 0,
+  SweepAndMop = 0,
   Mopping = 1,
-  SweepAndMop = 2,
+  Sweeping = 2,
   MopAfterSweep = 3,
 }
 

@@ -164,8 +164,13 @@ describe("Property bundle siids do not collide", () => {
 });
 
 describe("CleaningMode + WaterVolume (kept for back-compat with Tasshack callers)", () => {
-  it("CleaningMode covers the standard 0..3", () => {
-    expect(CleaningMode.Sweeping).toBe(0);
+  it("CleaningMode covers the corrected r2449a mapping", () => {
+    // Verified via 2026-05-25 observation probe on r2449a (label-before-tap,
+    // capture MQTT echo). Sweeping ↔ SweepAndMop values were inverted in
+    // v0.4.1/v0.4.2; see CHANGELOG for full context.
+    expect(CleaningMode.SweepAndMop).toBe(0);
+    expect(CleaningMode.Mopping).toBe(1);
+    expect(CleaningMode.Sweeping).toBe(2);
     expect(CleaningMode.MopAfterSweep).toBe(3);
   });
   it("WaterVolume covers Low/Medium/High = 1/2/3", () => {
