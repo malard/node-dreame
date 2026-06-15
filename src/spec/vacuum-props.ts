@@ -447,4 +447,10 @@ export const VACUUM_ACTION = {
   RESET_SILVER_ION: { siid: 19, aiid: 1 } as const,
   /** ASSUMED Tasshack. */
   RESET_DETERGENT: { siid: 20, aiid: 1 } as const,
+  /** ASSUMED Tasshack b24 — reset drive-track cleaning counter (see `CONSUMABLE_PROP.TRACK_CLEANING_*`). */
+  RESET_TRACK_CLEANING: { siid: 36, aiid: 1 } as const,
+  /** ASSUMED Tasshack b24 — reset washboard cleaning counter. */
+  RESET_WASHBOARD_CLEANING: { siid: 37, aiid: 1 } as const,
+  /** ASSUMED Tasshack b24 — reset dock filter-cleaning counter. */
+  RESET_FILTER_CLEANING: { siid: 38, aiid: 1 } as const,
 } as const;

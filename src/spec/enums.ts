@@ -85,6 +85,37 @@ export enum MiotState {
   CameraMonitoring = 98,
   CameraMonitoringPaused = 99,
   InitialDeepClean = 101,
+  // ─── ASSUMED from Tasshack dev (v2.0.0b24) ──────────────────────────
+  // Newer dock/mop lifecycle states. The raw-int value space for
+  // siid 2 piid 1 matches upstream's `DreameVacuumState` IntEnum
+  // exactly across every value we HAVE verified (1=Sweeping … 28=
+  // ReturnToEmpty), so these new ints are very likely correct — but
+  // none have been observed live on r2532a/r2449a yet. Treat the label
+  // as a hint; the integer is the source of truth. Arm/item-handling
+  // (109/113/114/115) and stair-climber (140-147) states are
+  // deliberately omitted — that's hardware we don't target.
+  ReturningToDrain = 31,
+  Draining = 32,
+  Emptying = 34,
+  DustBagDrying = 35,
+  DustBagDryingPaused = 36,
+  HeadingToExtraCleaning = 37,
+  ExtraCleaning = 38,
+  FindingPetPaused = 95,
+  FindingPet = 96,
+  InitialDeepCleanPaused = 102,
+  Sanitizing = 103,
+  SanitizingWithDry = 104,
+  ChangingMop = 105,
+  ChangingMopPaused = 106,
+  FloorMaintaining = 107,
+  FloorMaintainingPaused = 108,
+  InstallingMop = 116,
+  UninstallingMop = 117,
+  IntelligentRecharging = 118,
+  AssistedCleaning = 120,
+  EnteringDock = 121,
+  LeavingDock = 122,
 }
 
 /**

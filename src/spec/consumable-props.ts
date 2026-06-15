@@ -36,4 +36,20 @@ export const CONSUMABLE_PROP = {
   SCALE_INHIBITOR_DAYS_LEFT: { siid: 31, piid: 1 } as const,
   /** VERIFIED on r2532a 2026-05-02 — % of life remaining for the Scale Inhibitor (returned 89 in field). */
   SCALE_INHIBITOR_LEFT: { siid: 31, piid: 2 } as const,
+  // ─── ASSUMED from Tasshack dev (v2.0.0b24) — new maintenance counters on
+  //     newer dock hardware. siid/piid taken from upstream's property
+  //     mapping; NOT YET observed live on r2532a/r2449a. piid 1 = time-left,
+  //     piid 2 = % left (brush convention). Reset at `siid <X> aiid 1`.
+  /** ASSUMED Tasshack b24 — drive-track cleaning counter (hours/time remaining). */
+  TRACK_CLEANING_TIME_LEFT: { siid: 36, piid: 1 } as const,
+  /** ASSUMED Tasshack b24 — drive-track cleaning counter (% remaining). */
+  TRACK_CLEANING_LEFT: { siid: 36, piid: 2 } as const,
+  /** ASSUMED Tasshack b24 — washboard cleaning counter (hours/time remaining). */
+  WASHBOARD_CLEANING_TIME_LEFT: { siid: 37, piid: 1 } as const,
+  /** ASSUMED Tasshack b24 — washboard cleaning counter (% remaining). */
+  WASHBOARD_CLEANING_LEFT: { siid: 37, piid: 2 } as const,
+  /** ASSUMED Tasshack b24 — filter-cleaning counter (hours/time remaining). Distinct from `FILTER_*` (siid 11) — this is the dock's self-clean filter service. */
+  FILTER_CLEANING_TIME_LEFT: { siid: 38, piid: 1 } as const,
+  /** ASSUMED Tasshack b24 — filter-cleaning counter (% remaining). */
+  FILTER_CLEANING_LEFT: { siid: 38, piid: 2 } as const,
 } as const;

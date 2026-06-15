@@ -1120,6 +1120,16 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
   /**
    * VERIFIED end-to-end on r2532a 2026-05-03 — round-trip
    * `Standard → Quiet → Standard` confirmed via property read-back.
+   *
+   * **Footgun (per Tasshack dev `device.py:set_suction_level`):** the
+   * device **silently ignores** this write while *cruising* (camera
+   * patrol) and during *customized / per-room cleaning* (where suction
+   * is dictated by each room's saved settings rather than the global
+   * level). The `set_properties` call still ACKs, so a no-op is
+   * indistinguishable from success without a read-back. We don't track
+   * those modes reliably enough to refuse the write client-side, so
+   * callers that need a guarantee should read `SUCTION_LEVEL` back after
+   * writing while a clean is in progress.
    */
   setSuction(level: SuctionLevel): Promise<ActionResult> {
     return this.#singlePropWrite(VACUUM_PROP.SUCTION_LEVEL, level);
