@@ -151,6 +151,10 @@ export enum ChargingStatus {
  *   - `WheelRotationAnomaly = 1` — encoder reports motion that doesn't
  *     match commanded motor state (slip, forced rotation, debris,
  *     gear stuck). Auto-clears in ~12s once the cause resolves.
+ *   - `MainWheelTangled = 16` — main drive wheel physically tangled /
+ *     stuck (hair/fibre on the axle). Dreamehome app: "Robot may be
+ *     stuck, or the main wheels may be tangled." **Sticky** until
+ *     physically cleared. VERIFIED 2026-06-24 by inspection.
  *   - `RobotLifted = 18` — robot lifted / wheels off ground. **Sticky**
  *     until physical resolution.
  *   - `TaskComplete = 68` — task-complete notification. Fires together
@@ -183,6 +187,18 @@ export enum MiotError {
   Clear = 0,
   // ─── VERIFIED on r2532a ─────────────────────────────────────────────
   WheelRotationAnomaly = 1,
+  /**
+   * VERIFIED on r2532a 2026-06-24 — fired live with the main drive wheel
+   * physically tangled (hair/fibre wound on the axle), confirmed by
+   * inspection. Dreamehome app: "Robot may be stuck, or the main wheels
+   * may be tangled." Sticky until physically resolved; does NOT auto-clear
+   * like `WheelRotationAnomaly = 1`. Tasshack's `DreameVacuumErrorCode`
+   * maps 16 to `RIGHT_WHEEL_MOTOR`, but their table doesn't match this
+   * firmware (they have 18 = `FORWARD_SUFFOCATE` vs our verified
+   * 18 = `RobotLifted`), so that label is a weak hint only — the app
+   * string is ground truth.
+   */
+  MainWheelTangled = 16,
   RobotLifted = 18,
   TaskComplete = 68,
   ManualMopInstallRequired = 74,
