@@ -120,6 +120,14 @@ export const ABORT_REASONS: Record<number, string> = {
   [MiotError.BinFull]: "bin-full",
   [MiotError.StationDisconnected]: "station-disconnected",
   [MiotError.DustBagFull]: "dust-bag-full",
+  [MiotError.Route2]: "route-2",
+  [MiotError.Route]: "route",
+  [MiotError.NoGoZone]: "no-go-zone",
+  [MiotError.Ultrasonic]: "ultrasonic",
+  [MiotError.Blocked]: "blocked",
+  [MiotError.Blocked2]: "blocked-2",
+  [MiotError.Blocked3]: "blocked-3",
+  [MiotError.Restricted]: "restricted",
 };
 
 /**

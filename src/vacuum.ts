@@ -369,6 +369,10 @@ export class Vacuum extends TypedEmitter<VacuumEvents> {
       CONSUMABLE_PROP.MAIN_BRUSH_LEFT,
       CONSUMABLE_PROP.SIDE_BRUSH_LEFT,
       CONSUMABLE_PROP.FILTER_LEFT,
+      CONSUMABLE_PROP.SENSOR_HOURS_LEFT,
+      CONSUMABLE_PROP.SENSOR_DAYS_LEFT,
+      CONSUMABLE_PROP.SCALE_INHIBITOR_DAYS_LEFT,
+      CONSUMABLE_PROP.SCALE_INHIBITOR_LEFT,
     ];
     let kind: "acked" | "no-ack" = "acked";
     try {

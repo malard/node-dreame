@@ -256,6 +256,34 @@ export enum MiotError {
   StationDisconnected = 117,
   /** Disposable dust bag in the dock is full. */
   DustBagFull = 121,
+  // ─── Navigation / routing — OBSERVED live, meaning per Tasshack ─────
+  /**
+   * OBSERVED firing on r2532a 2026-06-23 — the integer is confirmed on
+   * our firmware, but the **meaning is UNCONFIRMED**. No corroborating
+   * message appeared in the Dreamehome app; a same-day "clean the
+   * sensors" prompt was an unrelated consumable-life warning, NOT this
+   * code (that is `CONSUMABLE_PROP.SENSOR_*`, siid 16 — a maintenance
+   * counter, not an ERROR). Tasshack/dreame-vacuum
+   * (`DreameVacuumErrorCode.ROUTE_2`) labels 62 a **path-planning /
+   * routing** fault (robot couldn't compute a route). We adopt that
+   * label as a HINT only; the integer remains the source of truth.
+   * Transient — auto-clears once the device replans.
+   */
+  Route2 = 62,
+  /** ASSUMED Tasshack `ROUTE = 61` — sibling path-planning fault. */
+  Route = 61,
+  /** ASSUMED Tasshack `NO_GO_ZONE = 59` — blocked by a user no-go zone. */
+  NoGoZone = 59,
+  /** ASSUMED Tasshack `ULTRASONIC = 58` — ultrasonic sensor obstruction / fault. */
+  Ultrasonic = 58,
+  /** ASSUMED Tasshack `BLOCKED = 47` — path blocked. */
+  Blocked = 47,
+  /** ASSUMED Tasshack `BLOCKED_2 = 63` — path blocked (firmware variant). */
+  Blocked2 = 63,
+  /** ASSUMED Tasshack `BLOCKED_3 = 64` — path blocked (firmware variant). */
+  Blocked3 = 64,
+  /** ASSUMED Tasshack `RESTRICTED = 65` — entry into a restricted area refused. */
+  Restricted = 65,
 }
 
 /**
