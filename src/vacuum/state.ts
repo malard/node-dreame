@@ -147,6 +147,20 @@ export interface VacuumState {
   mainBrushLeftPct: number | null;
   sideBrushLeftPct: number | null;
   filterLeftPct: number | null;
+  /**
+   * Dirt / cliff sensors maintenance counters (siid 16). Either hitting
+   * 0 triggers the Dreamehome "clean the sensors" prompt. Note the unit
+   * split: piid 1 is HOURS-left, piid 2 is DAYS-left (NOT a percentage).
+   * VERIFIED on r2532a 2026-05-02; reset via `VACUUM_ACTION.RESET_SENSOR`.
+   */
+  sensorHoursLeft: number | null;
+  sensorDaysLeft: number | null;
+  /**
+   * Dock Scale Inhibitor cartridge (siid 31): days-left (piid 1) and
+   * %-left (piid 2). VERIFIED on r2532a 2026-05-02.
+   */
+  scaleInhibitorDaysLeft: number | null;
+  scaleInhibitorLeftPct: number | null;
 
   /**
    * Whether the device is currently reachable via the cloud. Updated by
@@ -209,6 +223,10 @@ export const EMPTY_STATE: VacuumState = {
   mainBrushLeftPct: null,
   sideBrushLeftPct: null,
   filterLeftPct: null,
+  sensorHoursLeft: null,
+  sensorDaysLeft: null,
+  scaleInhibitorDaysLeft: null,
+  scaleInhibitorLeftPct: null,
   online: null,
   ota: null,
   activeMapId: null,
@@ -318,5 +336,9 @@ export const APPLIERS: Record<string, Applier> = {
   [propKey(CONSUMABLE_PROP.MAIN_BRUSH_LEFT)]: (value) => ({ mainBrushLeftPct: asNum(value) }),
   [propKey(CONSUMABLE_PROP.SIDE_BRUSH_LEFT)]: (value) => ({ sideBrushLeftPct: asNum(value) }),
   [propKey(CONSUMABLE_PROP.FILTER_LEFT)]: (value) => ({ filterLeftPct: asNum(value) }),
+  [propKey(CONSUMABLE_PROP.SENSOR_HOURS_LEFT)]: (value) => ({ sensorHoursLeft: asNum(value) }),
+  [propKey(CONSUMABLE_PROP.SENSOR_DAYS_LEFT)]: (value) => ({ sensorDaysLeft: asNum(value) }),
+  [propKey(CONSUMABLE_PROP.SCALE_INHIBITOR_DAYS_LEFT)]: (value) => ({ scaleInhibitorDaysLeft: asNum(value) }),
+  [propKey(CONSUMABLE_PROP.SCALE_INHIBITOR_LEFT)]: (value) => ({ scaleInhibitorLeftPct: asNum(value) }),
 };
 

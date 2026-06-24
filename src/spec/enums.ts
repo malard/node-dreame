@@ -85,6 +85,37 @@ export enum MiotState {
   CameraMonitoring = 98,
   CameraMonitoringPaused = 99,
   InitialDeepClean = 101,
+  // ─── ASSUMED from Tasshack dev (v2.0.0b24) ──────────────────────────
+  // Newer dock/mop lifecycle states. The raw-int value space for
+  // siid 2 piid 1 matches upstream's `DreameVacuumState` IntEnum
+  // exactly across every value we HAVE verified (1=Sweeping … 28=
+  // ReturnToEmpty), so these new ints are very likely correct — but
+  // none have been observed live on r2532a/r2449a yet. Treat the label
+  // as a hint; the integer is the source of truth. Arm/item-handling
+  // (109/113/114/115) and stair-climber (140-147) states are
+  // deliberately omitted — that's hardware we don't target.
+  ReturningToDrain = 31,
+  Draining = 32,
+  Emptying = 34,
+  DustBagDrying = 35,
+  DustBagDryingPaused = 36,
+  HeadingToExtraCleaning = 37,
+  ExtraCleaning = 38,
+  FindingPetPaused = 95,
+  FindingPet = 96,
+  InitialDeepCleanPaused = 102,
+  Sanitizing = 103,
+  SanitizingWithDry = 104,
+  ChangingMop = 105,
+  ChangingMopPaused = 106,
+  FloorMaintaining = 107,
+  FloorMaintainingPaused = 108,
+  InstallingMop = 116,
+  UninstallingMop = 117,
+  IntelligentRecharging = 118,
+  AssistedCleaning = 120,
+  EnteringDock = 121,
+  LeavingDock = 122,
 }
 
 /**
@@ -225,6 +256,34 @@ export enum MiotError {
   StationDisconnected = 117,
   /** Disposable dust bag in the dock is full. */
   DustBagFull = 121,
+  // ─── Navigation / routing — OBSERVED live, meaning per Tasshack ─────
+  /**
+   * OBSERVED firing on r2532a 2026-06-23 — the integer is confirmed on
+   * our firmware, but the **meaning is UNCONFIRMED**. No corroborating
+   * message appeared in the Dreamehome app; a same-day "clean the
+   * sensors" prompt was an unrelated consumable-life warning, NOT this
+   * code (that is `CONSUMABLE_PROP.SENSOR_*`, siid 16 — a maintenance
+   * counter, not an ERROR). Tasshack/dreame-vacuum
+   * (`DreameVacuumErrorCode.ROUTE_2`) labels 62 a **path-planning /
+   * routing** fault (robot couldn't compute a route). We adopt that
+   * label as a HINT only; the integer remains the source of truth.
+   * Transient — auto-clears once the device replans.
+   */
+  Route2 = 62,
+  /** ASSUMED Tasshack `ROUTE = 61` — sibling path-planning fault. */
+  Route = 61,
+  /** ASSUMED Tasshack `NO_GO_ZONE = 59` — blocked by a user no-go zone. */
+  NoGoZone = 59,
+  /** ASSUMED Tasshack `ULTRASONIC = 58` — ultrasonic sensor obstruction / fault. */
+  Ultrasonic = 58,
+  /** ASSUMED Tasshack `BLOCKED = 47` — path blocked. */
+  Blocked = 47,
+  /** ASSUMED Tasshack `BLOCKED_2 = 63` — path blocked (firmware variant). */
+  Blocked2 = 63,
+  /** ASSUMED Tasshack `BLOCKED_3 = 64` — path blocked (firmware variant). */
+  Blocked3 = 64,
+  /** ASSUMED Tasshack `RESTRICTED = 65` — entry into a restricted area refused. */
+  Restricted = 65,
 }
 
 /**

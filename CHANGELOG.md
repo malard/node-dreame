@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-24
+
+### Added
+
+- **Navigation / routing `MiotError` codes** — `Route2 = 62`, `Route = 61`,
+  `NoGoZone = 59`, `Ultrasonic = 58`, `Blocked = 47`, `Blocked2 = 63`,
+  `Blocked3 = 64`, `Restricted = 65`, with matching kebab abort reasons
+  (`route-2`, `route`, …). Code 62 was OBSERVED firing on r2532a — the
+  integer is confirmed on our firmware, the meaning is borrowed from
+  Tasshack's `ROUTE_2` (a path-planning fault) as a hint. Previously
+  these surfaced as the opaque `error-<n>` placeholder.
+- **Sensor and scale-inhibitor consumable counters in `Vacuum.state`** —
+  `sensorHoursLeft` / `sensorDaysLeft` (siid 16) and
+  `scaleInhibitorDaysLeft` / `scaleInhibitorLeftPct` (siid 31) are now
+  reduced into state and included in the `refresh()` poll batch. This
+  gives consumers a path to the in-app "clean the sensors" maintenance
+  warning (fired when either sensor counter hits 0), which previously had
+  no representation in library state. Note the unit split: sensor piid 1
+  is hours-left, piid 2 is days-left (not a percentage).
+
 ## [0.4.2] - 2026-05-24
 
 ### Breaking

@@ -283,6 +283,10 @@ export class DreameSubscription extends TypedEmitter<DreameSubscriptionEvents> {
     if (!client) {
       return;
     }
+    // `client.end()` cancels mqtt.js's internal reconnect timer, so we don't
+    // have the "reconnect fires after teardown" leak Tasshack fixed in their
+    // hand-rolled timer (dev `protocol.py` disconnect()). Reconnection here is
+    // delegated to mqtt.js (`reconnectPeriod` above), not managed by us.
     return new Promise((resolve) => {
       client.end(false, {}, () => resolve());
     });
